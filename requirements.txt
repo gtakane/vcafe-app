@@ -1,0 +1,6 @@
+streamlit>=1.36
+pandas>=2.0
+openpyxl>=3.1
+requests>=2.31
+firebase-admin>=6.0
+pyarrow>=14.0

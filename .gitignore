@@ -1,0 +1,18 @@
+# 秘密情報は絶対にコミットしない
+secrets_local.json
+secrets_local.example.json
+serviceAccountKey.json
+serviceAccountKey.json.json
+*.key
+*.pem
+.streamlit/secrets.toml
+data/_debug_shifts.txt
+# データ
+data/*.xlsx
+data/*.csv
+data/*.parquet
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
