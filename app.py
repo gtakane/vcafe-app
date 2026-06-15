@@ -152,7 +152,7 @@ elif page == "お給仕実績":
         )
 
     if do_fetch:
-        if not secrets.get("firebase_key_path"):
+        if not secrets.get("firebase_key_path") and not secrets.get("firebase_key_json"):
             st.error("Firebase鍵が未設定です（設定タブ参照）。")
         else:
             with st.spinner("Firestoreからデータを取得中（数秒〜数十秒かかります）..."):
