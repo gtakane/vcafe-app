@@ -166,23 +166,27 @@ PAID_TICKET_IDS   = frozenset(TICKET_PRICES.keys())
 _WEEKDAY_JP = ["月", "火", "水", "木", "金", "土", "日"]
 
 
-def _calc_revenue(ticket_id: str, billed_coin: int, room_type: str) -> float:
+def _calc_revenue(ticket_id: str, billed_coin: int, billed_reward: int,
+                  room_type: str, is_test: bool) -> float:
     """usedTicketItemId・roomType から売上（円）を返す。
-    - reservation 枠          → ¥3,920 固定
-    - 固定価格チケット          → TICKET_PRICES の値
-    - ATCOIN（コイン払い）      → billedCoin × 1.4
+    - testUser=true              → ¥0（テストユーザー）
+    - reservation 枠             → ¥3,920 固定
+    - 固定価格チケット             → TICKET_PRICES の値
+    - ATCOIN/リワードポイント払い  → (billedCoin + billedRewardPoint) × 1.4
     """
+    if is_test:
+        return 0.0
     if room_type == "reservation":
         return float(RESERVATION_PRICE)
     if ticket_id in TICKET_PRICES:
         return float(TICKET_PRICES[ticket_id])
-    return round(billed_coin * 1.4, 0)
+    return round((billed_coin + billed_reward) * 1.4, 0)
 
 
-def _classify_type(ticket_id: str, billed_coin: int, room_type: str) -> str:
-    if room_type == "reservation" or ticket_id in PAID_TICKET_IDS:
-        return "有料"
-    return "有料" if billed_coin > 0 else "無料"
+def _classify_type(ticket_id: str, is_test: bool) -> str:
+    if is_test or ticket_id in FREE_TICKET_IDS:
+        return "無料"
+    return "有料"
 
 
 def get_firestore_client(secrets: dict, base_dir: Path, env: str = "テスト"):
@@ -241,30 +245,51 @@ def fetch_visits(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame:
         if getattr(enter, "tzinfo", None) is None:
             enter = enter.replace(tzinfo=timezone.utc)
         enter_jst = enter.astimezone(JST)
-        billed     = int(d.get("billedCoin") or 0)
-        ticket     = str(d.get("usedTicketItemId") or "ATCOIN")
-        room_type  = str(d.get("roomType") or "")
-        init_time  = int(d.get("initialTime") or 20)
-        weight     = max(1, round(init_time / 20))  # 20分=1, 40分=2
+        billed        = int(d.get("billedCoin") or 0)
+        billed_reward = int(d.get("billedRewardPoint") or 0)
+        ticket        = str(d.get("usedTicketItemId") or "ATCOIN")
+        room_type     = str(d.get("roomType") or "")
+        init_time     = int(d.get("initialTime") or 20)
+        weight        = max(1, round(init_time / 20))  # 20分=1, 40分=2
         rows.append({
-            "doc_id":           doc.id,
-            "userId":           doc.reference.parent.parent.id,
-            "enterDateTime":    enter_jst.replace(tzinfo=None),
-            "maidNickname":     str(d.get("maidNickname") or ""),
-            "billedCoin":       billed,
-            "usedTicketItemId": ticket,
-            "roomType":         room_type,
-            "initialTime":      init_time,
-            "visitWeight":      weight,
-            "revenue":          _calc_revenue(ticket, billed, room_type),
-            "type":             _classify_type(ticket, billed, room_type),
+            "doc_id":             doc.id,
+            "userId":             doc.reference.parent.parent.id,
+            "enterDateTime":      enter_jst.replace(tzinfo=None),
+            "maidNickname":       str(d.get("maidNickname") or ""),
+            "billedCoin":         billed,
+            "billedRewardPoint":  billed_reward,
+            "usedTicketItemId":   ticket,
+            "roomType":           room_type,
+            "initialTime":        init_time,
+            "visitWeight":        weight,
+            "revenue":            0.0,   # testUser 確認後に更新
+            "type":               "",    # testUser 確認後に更新
         })
 
     _VISIT_COLS = ["doc_id", "userId", "enterDateTime", "maidNickname",
-                   "billedCoin", "usedTicketItemId", "roomType",
+                   "billedCoin", "billedRewardPoint", "usedTicketItemId", "roomType",
                    "initialTime", "visitWeight", "revenue", "type"]
     if not rows:
         return pd.DataFrame(columns=_VISIT_COLS)
+
+    # users/{userId} を一括取得してテストユーザーを判定
+    unique_uids = list({r["userId"] for r in rows if r["userId"]})
+    test_user_ids: set = set()
+    try:
+        refs = [db.collection("users").document(uid) for uid in unique_uids]
+        for udoc in db.get_all(refs):
+            if udoc.exists and udoc.to_dict().get("testUser") is True:
+                test_user_ids.add(udoc.id)
+    except Exception:
+        pass
+
+    for r in rows:
+        is_test = r["userId"] in test_user_ids
+        r["revenue"] = _calc_revenue(
+            r["usedTicketItemId"], r["billedCoin"], r["billedRewardPoint"],
+            r["roomType"], is_test)
+        r["type"] = _classify_type(r["usedTicketItemId"], is_test)
+
     df = pd.DataFrame(rows)
     df["enterDateTime"] = pd.to_datetime(df["enterDateTime"])
     return df.reset_index(drop=True)
@@ -323,6 +348,9 @@ def fetch_maid_admissions(db, df_shifts: pd.DataFrame) -> pd.DataFrame:
                     .collection("roomAdmissions")
                     .where("userId", "==", maid_id)
                     .stream())
+            shift_open  = shift["openTime"]
+            shift_close = shift["closeTime"]
+            tol = timedelta(hours=1)
             for doc in docs:
                 d = doc.to_dict()
                 connected = d.get("connectedTime")
@@ -333,6 +361,11 @@ def fetch_maid_admissions(db, df_shifts: pd.DataFrame) -> pd.DataFrame:
                     connected = connected.astimezone(JST).replace(tzinfo=None)
                 if exit_t is not None and hasattr(exit_t, "astimezone"):
                     exit_t = exit_t.astimezone(JST).replace(tzinfo=None)
+                # このシフトの時間帯（±1時間の余裕）に入室した記録のみ対象
+                if pd.notna(shift_close) and (
+                    connected < shift_open - tol or connected > shift_close + tol
+                ):
+                    continue
                 rows.append({
                     "shiftId":       shift["shiftId"],
                     "roomId":        room_id,
