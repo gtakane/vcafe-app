@@ -5,73 +5,235 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
 import core
 
 BASE = Path(__file__).parent
-st.set_page_config(page_title="Vあっと運営アプリ", page_icon="💻", layout="wide")
+st.set_page_config(page_title="Vあっと運営アプリ", page_icon="💜", layout="wide")
 
-# ---- CSS ----
-st.markdown("""
+# ============================================================
+# デザインシステム
+# ============================================================
+BRAND   = "#6c63ff"   # メインパープル
+BRAND2  = "#48c78e"   # アクセントグリーン
+BRAND3  = "#f14668"   # アクセントレッド（警告）
+BG_PAGE = "#f0f2f9"   # ページ背景（薄ラベンダー）
+BG_CARD = "#ffffff"
+TEXT_HI = "#1a1a2e"   # 見出し文字
+TEXT_MU = "#6b7280"   # ミュート文字
+
+# Plotly グラフ共通テーマ
+_PL_LAYOUT = dict(
+    paper_bgcolor="white",
+    plot_bgcolor="#f7f8fc",
+    font=dict(family="'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif", size=12, color=TEXT_HI),
+    margin=dict(t=36, b=16, l=16, r=16),
+    hoverlabel=dict(bgcolor="white", font_size=12),
+    showlegend=False,
+)
+_PL_AXIS = dict(showgrid=True, gridcolor="#e8eaf6", zeroline=False,
+                tickfont=dict(size=12), title="")
+
+# ---- Google Fonts + 包括 CSS ----
+st.markdown(f"""
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-/* サイドバー */
-[data-testid="stSidebar"] {
-    background: #0f1117;
-}
-[data-testid="stSidebar"] * {
-    color: #e0e0e0 !important;
-}
-[data-testid="stSidebar"] .stRadio label { color: #e0e0e0 !important; }
+/* ベースフォント */
+html, body, [class*="css"], .stApp {{
+    font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', sans-serif !important;
+}}
 
-/* KPI カード */
-[data-testid="stMetric"] {
-    background: #ffffff;
-    border: 1px solid #e8eaf0;
-    border-radius: 12px;
-    padding: 1rem 1.2rem !important;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-}
-[data-testid="stMetricLabel"] > div {
-    font-size: 0.78rem !important;
-    font-weight: 600 !important;
-    color: #6b7280 !important;
-    letter-spacing: 0.03em;
-}
-[data-testid="stMetricValue"] > div {
-    font-size: 1.7rem !important;
+/* ページ背景 */
+.stApp {{ background: {BG_PAGE} !important; }}
+.main .block-container {{
+    padding: 2rem 2.5rem 3rem !important;
+    max-width: 1400px !important;
+}}
+
+/* ===== サイドバー ===== */
+[data-testid="stSidebar"] > div:first-child {{
+    background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%) !important;
+    border-right: none !important;
+}}
+[data-testid="stSidebar"] * {{
+    color: #c8d0e7 !important;
+}}
+[data-testid="stSidebar"] hr {{
+    border-color: rgba(255,255,255,0.12) !important;
+}}
+/* ラジオボタンのカーソル行 */
+[data-testid="stSidebar"] [data-testid="stRadio"] label:hover {{
+    color: #ffffff !important;
+}}
+[data-testid="stSidebar"] [data-testid="stRadio"] [aria-checked="true"] + div {{
+    color: {BRAND} !important;
+}}
+
+/* ===== ページタイトル ===== */
+h1 {{
+    color: {TEXT_HI} !important;
+    font-size: 1.9rem !important;
     font-weight: 700 !important;
-    color: #111827 !important;
-}
-
-/* セクション見出し */
-h2, h3 { color: #111827 !important; font-weight: 700 !important; }
-
-/* データフレーム */
-[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
-
-/* ボタン */
-[data-testid="baseButton-primary"] {
-    background: #4f46e5 !important;
-    border: none !important;
-    border-radius: 8px !important;
+    letter-spacing: -0.02em !important;
+    margin-bottom: 0.1rem !important;
+}}
+h2 {{
+    color: {TEXT_HI} !important;
+    font-size: 1.2rem !important;
+    font-weight: 700 !important;
+    margin-top: 1.6rem !important;
+    margin-bottom: 0.6rem !important;
+    padding-bottom: 0.4rem !important;
+    border-bottom: 2px solid {BRAND} !important;
+    display: inline-block !important;
+}}
+h3 {{
+    color: {TEXT_HI} !important;
+    font-size: 1.05rem !important;
     font-weight: 600 !important;
-    padding: 0.4rem 1.2rem !important;
-}
-[data-testid="baseButton-primary"]:hover {
-    background: #4338ca !important;
-}
+}}
 
-/* 区切り線 */
-hr { border-color: #e8eaf0 !important; margin: 1.5rem 0 !important; }
+/* ===== st.metric (KPIカード) ===== */
+[data-testid="stMetric"] {{
+    background: {BG_CARD} !important;
+    border-radius: 14px !important;
+    padding: 1.1rem 1.3rem !important;
+    box-shadow: 0 2px 12px rgba(108,99,255,0.10) !important;
+    border-left: 4px solid {BRAND} !important;
+    transition: box-shadow 0.2s !important;
+}}
+[data-testid="stMetric"]:hover {{
+    box-shadow: 0 4px 20px rgba(108,99,255,0.18) !important;
+}}
+[data-testid="stMetricLabel"] p {{
+    font-size: 0.72rem !important;
+    font-weight: 600 !important;
+    color: {TEXT_MU} !important;
+    letter-spacing: 0.06em !important;
+    text-transform: uppercase !important;
+    margin-bottom: 0.3rem !important;
+}}
+[data-testid="stMetricValue"] > div {{
+    font-size: 1.75rem !important;
+    font-weight: 700 !important;
+    color: {TEXT_HI} !important;
+    line-height: 1.2 !important;
+}}
 
-/* タブ */
-[data-testid="stTab"] { font-weight: 600; }
+/* ===== プライマリボタン ===== */
+button[kind="primary"], [data-testid="baseButton-primary"] {{
+    background: {BRAND} !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    font-size: 0.9rem !important;
+    padding: 0.55rem 1.4rem !important;
+    color: white !important;
+    box-shadow: 0 2px 8px rgba(108,99,255,0.3) !important;
+    transition: all 0.2s !important;
+}}
+button[kind="primary"]:hover, [data-testid="baseButton-primary"]:hover {{
+    background: #5548e0 !important;
+    box-shadow: 0 4px 14px rgba(108,99,255,0.4) !important;
+    transform: translateY(-1px) !important;
+}}
+
+/* ===== データフレーム ===== */
+[data-testid="stDataFrame"] {{
+    border-radius: 12px !important;
+    overflow: hidden !important;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.07) !important;
+}}
+
+/* ===== タブ ===== */
+[data-testid="stTabs"] [role="tablist"] {{
+    background: {BG_CARD} !important;
+    border-radius: 10px 10px 0 0 !important;
+    padding: 0 0.5rem !important;
+    gap: 0 !important;
+}}
+button[role="tab"] {{
+    font-weight: 600 !important;
+    font-size: 0.88rem !important;
+    padding: 0.6rem 1.2rem !important;
+    color: {TEXT_MU} !important;
+    border-bottom: 3px solid transparent !important;
+    border-radius: 0 !important;
+}}
+button[role="tab"][aria-selected="true"] {{
+    color: {BRAND} !important;
+    border-bottom: 3px solid {BRAND} !important;
+    background: transparent !important;
+}}
+
+/* ===== info / warning / success ===== */
+[data-testid="stAlert"] {{
+    border-radius: 10px !important;
+    border: none !important;
+}}
+
+/* ===== 区切り線 ===== */
+hr {{ border-color: #dde1f0 !important; margin: 1.8rem 0 !important; }}
+
+/* ===== キャプション ===== */
+[data-testid="stCaptionContainer"] p {{
+    color: {TEXT_MU} !important;
+    font-size: 0.8rem !important;
+}}
+
+/* ===== expander ===== */
+[data-testid="stExpander"] {{
+    background: {BG_CARD} !important;
+    border-radius: 12px !important;
+    border: 1px solid #e0e4f0 !important;
+}}
 </style>
 """, unsafe_allow_html=True)
 
-# ---- 秘密情報・環境 ----
+# ============================================================
+# ヘルパー: Plotly グラフ
+# ============================================================
+def _apply(fig):
+    fig.update_layout(**_PL_LAYOUT)
+    fig.update_xaxes(**_PL_AXIS)
+    fig.update_yaxes(**_PL_AXIS)
+    return fig
+
+
+def hbar(df, y_col, x_col, color=BRAND, title="", height=None):
+    """横棒グラフ — メイド名などラベルが長い列に使う"""
+    df_s = df.sort_values(x_col, ascending=True).tail(30)
+    h = height or max(320, len(df_s) * 34)
+    fig = px.bar(df_s, y=y_col, x=x_col, orientation="h",
+                 text=x_col, title=title, height=h,
+                 color_discrete_sequence=[color])
+    fig.update_traces(textposition="outside", cliponaxis=False,
+                      marker_line_width=0)
+    fig.update_yaxes(tickfont=dict(size=13), title="", automargin=True)
+    fig.update_xaxes(title="")
+    _apply(fig)
+    fig.update_layout(margin=dict(t=36, b=16, l=8, r=60))
+    return fig
+
+
+def vbar(df, x_col, y_col, color=BRAND, title="", text_fmt=None, height=320):
+    """縦棒グラフ — 日付・時間帯・曜日など"""
+    fig = px.bar(df, x=x_col, y=y_col, title=title,
+                 text=y_col, height=height,
+                 color_discrete_sequence=[color])
+    if text_fmt:
+        fig.update_traces(texttemplate=text_fmt, textposition="outside")
+    else:
+        fig.update_traces(textposition="outside")
+    fig.update_traces(marker_line_width=0, cliponaxis=False)
+    _apply(fig)
+    return fig
+
+
+# ============================================================
+# 秘密情報・環境
+# ============================================================
 secrets = core.load_secrets(BASE)
 if "env" not in st.session_state:
     st.session_state.env = "テスト"
@@ -80,15 +242,22 @@ if "env" not in st.session_state:
 # サイドバー
 # ============================================================
 with st.sidebar:
-    st.markdown("### Vあっと運営アプリ")
-    st.caption("バーチャルあっとほぉーむカフェ")
+    st.markdown("""
+    <div style="padding:1.2rem 0.5rem 0.8rem; text-align:center;">
+      <div style="font-size:1.5rem; font-weight:700; color:#ffffff; letter-spacing:-0.02em;">
+        Vあっと
+      </div>
+      <div style="font-size:0.75rem; color:#8892b0; margin-top:2px; letter-spacing:0.08em;">
+        OPERATIONS DASHBOARD
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
     st.divider()
 
-    st.session_state.env = st.radio(
-        "環境", ["テスト", "本番"],
-        index=0 if st.session_state.env == "テスト" else 1,
-    )
-    if st.session_state.env == "本番":
+    env_choice = st.radio("環境", ["テスト", "本番"],
+                          index=0 if st.session_state.env == "テスト" else 1)
+    st.session_state.env = env_choice
+    if env_choice == "本番":
         st.error("⚠ 本番環境")
     else:
         st.success("テスト環境")
@@ -101,7 +270,7 @@ with st.sidebar:
         "予約通知（準備中）",
         "シフト反映（準備中）",
         "設定",
-    ])
+    ], label_visibility="collapsed")
 
 IS_PROD = st.session_state.env == "本番"
 
@@ -111,50 +280,29 @@ def prod_banner():
         st.error("⚠ 本番環境です。実行内容をよく確認してください。")
 
 
-# ---- カラーパレット ----
-_CLR_PRIMARY = "#4f46e5"
-_CLR_MAIDS   = px.colors.qualitative.Pastel
-
-
-def _bar(df, x, y, title="", color=_CLR_PRIMARY, height=380, text_col=None):
-    """横長棒グラフ（全ラベル表示）"""
-    fig = px.bar(df, x=x, y=y, title=title,
-                 text=text_col or y, height=height,
-                 color_discrete_sequence=[color])
-    fig.update_traces(textposition="outside", cliponaxis=False)
-    fig.update_layout(
-        margin=dict(t=40, b=120, l=10, r=10),
-        xaxis=dict(tickangle=-45, title=""),
-        yaxis=dict(title=""),
-        plot_bgcolor="#f9fafb",
-        paper_bgcolor="white",
-        font=dict(family="sans-serif", size=12),
-        title_font_size=14,
-        showlegend=False,
-    )
-    return fig
-
-
 # ============================================================
 # ホーム
 # ============================================================
 if page == "ホーム":
     st.title("Vあっと運営アプリ")
-    st.caption("バーチャルあっとほぉーむカフェ 内部管理ツール")
+    st.caption("バーチャルあっとほぉーむカフェ 内部管理ダッシュボード")
+    st.divider()
     c1, c2, c3 = st.columns(3)
     c1.metric("現在の環境", st.session_state.env)
-    c2.metric("Discordトークン",
+    c2.metric("Discord Bot",
               "設定済み" if secrets.get("discord_bot_token") else "未設定")
-    c3.metric("Firebase鍵",
+    c3.metric("Firebase",
               "設定済み" if secrets.get("firebase_key_path") or secrets.get("firebase_key_json") else "未設定")
     st.divider()
-    st.subheader("ロードマップ")
-    st.markdown(
-        "- ✅ 勤怠レポートの可視化\n"
-        "- ✅ お給仕実績ダッシュボード（Firestore）\n"
-        "- ⬜ 予約通知（Firestore → Discord）\n"
-        "- ⬜ シフト反映（シフト表 → 本番Firestore）"
-    )
+    st.subheader("機能ステータス")
+    items = [
+        ("✅", "勤怠レポート可視化", "完成"),
+        ("✅", "お給仕実績ダッシュボード（Firestore）", "完成"),
+        ("🔧", "予約通知（Firestore → Discord）", "開発中"),
+        ("🔧", "シフト反映（シフト表 → 本番Firestore）", "開発中"),
+    ]
+    for icon, name, status in items:
+        st.markdown(f"{icon} &nbsp; **{name}** &nbsp; `{status}`", unsafe_allow_html=True)
 
 # ============================================================
 # 勤怠レポート
@@ -180,42 +328,43 @@ elif page == "勤怠レポート":
 
     kpi = core.summarize_kpis(summary, detail)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("メイド数",       kpi["メイド数"])
-    c2.metric("総シフト数",     kpi["総シフト数"])
-    c3.metric("平均欠勤率",     f"{kpi['平均欠勤率']*100:.1f}%")
-    c4.metric("当日連絡件数",   kpi["当日連絡件数"])
+    c1.metric("メイド数",     kpi["メイド数"])
+    c2.metric("総シフト数",   kpi["総シフト数"])
+    c3.metric("平均欠勤率",   f"{kpi['平均欠勤率']*100:.1f}%")
+    c4.metric("当日連絡件数", kpi["当日連絡件数"])
 
-    st.divider()
-    st.subheader("欠勤率ランキング")
+    st.subheader("欠勤率ランキング（上位 15 名）")
     rank = (summary[summary["シフト数"] > 0]
             .sort_values("欠勤率", ascending=False)
             [["メイド名", "シフト数", "欠勤", "欠勤率"]].head(15))
-    fig = px.bar(rank, x="メイド名", y="欠勤率", text="欠勤率",
-                 color_discrete_sequence=[_CLR_PRIMARY], height=360)
-    fig.update_traces(texttemplate="%{text:.1%}", textposition="outside")
-    fig.update_layout(yaxis_tickformat=".0%", xaxis_tickangle=-45,
-                      plot_bgcolor="#f9fafb", paper_bgcolor="white",
-                      margin=dict(b=120))
+    fig = px.bar(rank, y="メイド名", x="欠勤率", orientation="h",
+                 text="欠勤率", color_discrete_sequence=[BRAND3],
+                 height=max(300, len(rank) * 34))
+    fig.update_traces(texttemplate="%{text:.1%}", textposition="outside",
+                      marker_line_width=0)
+    fig.update_xaxes(tickformat=".0%", title="")
+    fig.update_yaxes(title="", automargin=True)
+    _apply(fig)
     st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("一覧")
     show = summary.copy()
-    show["欠勤率"] = (show["欠勤率"] * 100).round(1)
-    show["遅刻率"] = (show["遅刻率"] * 100).round(1)
+    show["欠勤率"] = (show["欠勤率"] * 100).round(1).astype(str) + "%"
+    show["遅刻率"] = (show["遅刻率"] * 100).round(1).astype(str) + "%"
     st.dataframe(show, use_container_width=True, hide_index=True)
 
     if not detail.empty and "種別" in detail.columns:
         st.subheader("種別ごとの件数")
         vc = detail["種別"].value_counts().reset_index()
         vc.columns = ["種別", "件数"]
-        fig2 = px.bar(vc, x="種別", y="件数", color_discrete_sequence=[_CLR_PRIMARY])
-        fig2.update_layout(plot_bgcolor="#f9fafb", paper_bgcolor="white")
+        fig2 = vbar(vc, "種別", "件数", title="")
         st.plotly_chart(fig2, use_container_width=True)
 
     st.download_button(
         "サマリーをCSVで保存",
         summary.to_csv(index=False).encode("utf-8-sig"),
-        file_name="勤怠サマリー.csv", mime="text/csv")
+        file_name="勤怠サマリー.csv", mime="text/csv",
+        type="primary")
 
 # ============================================================
 # お給仕実績
@@ -224,28 +373,25 @@ elif page == "お給仕実績":
     st.title("お給仕実績ダッシュボード")
     prod_banner()
 
-    # ---- 期間選択 ----
+    # ---- 期間選択 + データ更新 ----
     today = date.today()
-    c1, c2 = st.columns(2)
-    start_date = c1.date_input("取得開始日", value=today.replace(day=1))
-    end_date   = c2.date_input("取得終了日", value=today)
-
-    # ---- データ更新ボタン ----
-    col_btn, col_info = st.columns([3, 4])
-    with col_btn:
-        do_fetch = st.button("データ更新（Firestoreから再取得）", type="primary")
-    with col_info:
+    with st.expander("期間・データ取得", expanded=True):
+        c1, c2, c3 = st.columns([2, 2, 3])
+        start_date = c1.date_input("開始日", value=today.replace(day=1))
+        end_date   = c2.date_input("終了日", value=today)
+        do_fetch   = c3.button("Firestoreから再取得", type="primary",
+                               use_container_width=True)
         mt = core.cache_mtime(BASE, "visits", st.session_state.env)
         st.caption(
             f"キャッシュ最終更新: {mt.strftime('%Y-%m-%d %H:%M')}" if mt
-            else "キャッシュなし — まずデータ更新を実行してください"
+            else "キャッシュなし — まずデータ取得を実行してください"
         )
 
     if do_fetch:
         if not secrets.get("firebase_key_path") and not secrets.get("firebase_key_json"):
-            st.error("Firebase鍵が未設定です（設定タブ参照）。")
+            st.error("Firebase鍵が未設定です（設定ページ参照）。")
         else:
-            with st.spinner("Firestoreからデータを取得中..."):
+            with st.spinner("Firestore からデータを取得中..."):
                 try:
                     db    = core.get_firestore_client(secrets, BASE, st.session_state.env)
                     s_jst = datetime.combine(start_date, time.min).replace(tzinfo=core.JST)
@@ -258,8 +404,8 @@ elif page == "お給仕実績":
                     df_sd = core.calc_shift_detail(df_ws)
                     core.save_cache(df_sd, BASE, "shifts", st.session_state.env)
                     st.success(
-                        f"取得完了: ご帰宅 {len(df_v):,} 件 / チェキ {len(df_c):,} 件"
-                        f" / シフト {len(df_ws):,} 件"
+                        f"取得完了: ご帰宅 {len(df_v):,} 件 ／ "
+                        f"チェキ {len(df_c):,} 件 ／ シフト {len(df_ws):,} 件"
                     )
                     st.rerun()
                 except ImportError as e:
@@ -270,10 +416,10 @@ elif page == "お給仕実績":
                     msg = str(e)
                     url_m = re.search(r"https://console\.firebase\.google\.com\S+", msg)
                     if url_m:
-                        st.error("Firestoreのインデックスが未作成です。以下のURLからインデックスを作成してください。")
+                        st.error("Firestore インデックスが未作成です。下記 URL から作成してください。")
                         st.code(url_m.group())
                     else:
-                        st.error(f"Firestore取得エラー: {msg}")
+                        st.error(f"Firestore エラー: {msg}")
 
     # ---- キャッシュ読み込み ----
     df_v  = core.load_cache(BASE, "visits",  st.session_state.env)
@@ -281,39 +427,35 @@ elif page == "お給仕実績":
     df_sd = core.load_cache(BASE, "shifts",  st.session_state.env)
 
     if df_v is None:
-        st.info("「データ更新」ボタンを押してFirestoreからデータを取得してください。")
+        st.info("「Firestoreから再取得」を押してデータを取得してください。")
         st.stop()
 
     # ---- 期間フィルタ ----
     dt_col = pd.to_datetime(df_v["enterDateTime"])
-    cache_min = dt_col.min().date() if not dt_col.empty else start_date
-    cache_max = dt_col.max().date() if not dt_col.empty else end_date
-    df_v = df_v[(dt_col.dt.date >= start_date) & (dt_col.dt.date <= end_date)].copy()
+    df_v   = df_v[(dt_col.dt.date >= start_date) & (dt_col.dt.date <= end_date)].copy()
 
     df_c = df_c if (df_c is not None and not df_c.empty) else pd.DataFrame(
         columns=["doc_id", "userId", "date", "maidNickname"])
     if not df_c.empty:
         dc_col = pd.to_datetime(df_c["date"])
-        df_c = df_c[(dc_col.dt.date >= start_date) & (dc_col.dt.date <= end_date)].copy()
+        df_c   = df_c[(dc_col.dt.date >= start_date) & (dc_col.dt.date <= end_date)].copy()
 
     df_sh = None
     if df_sd is not None and not df_sd.empty:
-        ds_col = pd.to_datetime(df_sd["openTime"])
+        ds_col  = pd.to_datetime(df_sd["openTime"])
         df_sd_f = df_sd[(ds_col.dt.date >= start_date) & (ds_col.dt.date <= end_date)].copy()
-        df_sh = core.agg_shift_hours(df_sd_f)
-
-    st.caption(
-        f"キャッシュ: {cache_min} 〜 {cache_max} ／ 表示中: {start_date} 〜 {end_date}"
-    )
+        df_sh   = core.agg_shift_hours(df_sd_f)
 
     if df_v.empty:
-        st.warning("選択期間にデータがありません。期間を変更するか、データ更新してください。")
+        st.warning("選択期間にデータがありません。")
         st.stop()
 
     if "visitWeight" not in df_v.columns:
         df_v["visitWeight"] = 1
 
-    # ---- KPI ----
+    # ============================================================
+    # KPI バー
+    # ============================================================
     paid          = df_v[df_v["type"] == "有料"]
     cheki         = core.agg_cheki(df_c, df_v)
     visit_revenue = df_v["revenue"].sum()
@@ -324,102 +466,96 @@ elif page == "お給仕実績":
     paid_visits   = int((df_v["visitWeight"] * (df_v["type"] == "有料").astype(int)).sum())
     rsv_count     = int((df_v["roomType"] == "reservation").sum())
 
-    k1, k2, k3, k4, k5, k6, k7 = st.columns(7)
-    k1.metric("総ご帰宅数",       f"{total_visits:,}")
-    k2.metric("有料ご帰宅数",     f"{paid_visits:,}")
-    k3.metric("予約数",           f"{rsv_count:,}")
-    k4.metric("総売上（推計）",   f"¥{total_revenue:,.0f}")
-    k5.metric("平均単価（有料）", f"¥{avg_unit:,.0f}")
-    k6.metric("総チェキ数",       f"{cheki['total']:,}")
-    k7.metric("チェキ装着率",     f"{cheki['rate']*100:.1f}%")
+    cols = st.columns(7)
+    kpis = [
+        ("総ご帰宅数",       f"{total_visits:,}"),
+        ("有料ご帰宅数",     f"{paid_visits:,}"),
+        ("予約数",           f"{rsv_count:,}"),
+        ("総売上（推計）",   f"¥{total_revenue:,.0f}"),
+        ("平均単価（有料）", f"¥{avg_unit:,.0f}"),
+        ("総チェキ数",       f"{cheki['total']:,}"),
+        ("チェキ装着率",     f"{cheki['rate']*100:.1f}%"),
+    ]
+    for col, (label, val) in zip(cols, kpis):
+        col.metric(label, val)
 
-    st.divider()
-
-    # ---- 日次推移 ----
+    # ============================================================
+    # 日次推移
+    # ============================================================
     st.subheader("日次推移")
     daily = core.agg_daily(df_v)
     if not daily.empty:
         tab1, tab2 = st.tabs(["ご帰宅数", "売上（推計）"])
         with tab1:
-            fig = px.bar(daily, x="date", y="ご帰宅数", text="ご帰宅数",
-                         color_discrete_sequence=[_CLR_PRIMARY], height=320)
-            fig.update_traces(textposition="outside")
-            fig.update_layout(xaxis_title="", yaxis_title="",
-                              plot_bgcolor="#f9fafb", paper_bgcolor="white",
-                              margin=dict(t=20, b=40))
+            fig = vbar(daily, "date", "ご帰宅数", color=BRAND, height=300)
             st.plotly_chart(fig, use_container_width=True)
         with tab2:
-            fig = px.bar(daily, x="date", y="売上", text="売上",
-                         color_discrete_sequence=["#10b981"], height=320)
-            fig.update_traces(texttemplate="¥%{text:,.0f}", textposition="outside")
-            fig.update_layout(xaxis_title="", yaxis_title="",
-                              plot_bgcolor="#f9fafb", paper_bgcolor="white",
-                              margin=dict(t=20, b=40))
+            fig = vbar(daily, "date", "売上", color=BRAND2,
+                       text_fmt="¥%{text:,.0f}", height=300)
             st.plotly_chart(fig, use_container_width=True)
 
-    # ---- メイド別実績 ----
+    # ============================================================
+    # メイド別実績
+    # ============================================================
     st.subheader("メイド別実績")
     maid_df = core.agg_by_maid(df_v, df_c, df_sh)
 
-    # 棒グラフ（全メイド名・回転ラベル）
-    fig = _bar(maid_df, x="maidNickname", y="ご帰宅数", title="メイド別ご帰宅数")
-    st.plotly_chart(fig, use_container_width=True)
+    tab_chart, tab_table = st.tabs(["グラフ", "テーブル"])
+    with tab_chart:
+        sub1, sub2 = st.columns(2)
+        with sub1:
+            fig = hbar(maid_df, "maidNickname", "ご帰宅数", color=BRAND,
+                       title="ご帰宅数（加重）")
+            st.plotly_chart(fig, use_container_width=True)
+        with sub2:
+            fig = hbar(maid_df, "maidNickname", "合計売上", color=BRAND2,
+                       title="合計売上（推計）")
+            fig.update_traces(texttemplate="¥%{x:,.0f}")
+            st.plotly_chart(fig, use_container_width=True)
 
-    # テーブル
-    _yen = st.column_config.NumberColumn(format="¥%,.0f")
-    _col_cfg = {
-        "maidNickname": st.column_config.TextColumn("メイド名", width="medium"),
-        "ご帰宅数":     st.column_config.NumberColumn("ご帰宅数"),
-        "有料数":       st.column_config.NumberColumn("有料数"),
-        "予約数":       st.column_config.NumberColumn("予約数"),
-        "ご帰宅売上":   _yen,
-        "チェキ売上":   _yen,
-        "合計売上":     _yen,
-        "平均単価":     _yen,
-    }
-    if "稼働時間数" in maid_df.columns:
-        _col_cfg["稼働時間数"]   = st.column_config.NumberColumn("稼働時間(h)", format="%.1f")
-        _col_cfg["遅刻合計分"]   = st.column_config.NumberColumn("遅刻(分)")
-        _col_cfg["平均ご帰宅数"] = st.column_config.NumberColumn("平均(/h)", format="%.2f")
-    st.dataframe(maid_df, column_config=_col_cfg,
-                 use_container_width=True, hide_index=True)
+    with tab_table:
+        _yen = st.column_config.NumberColumn(format="¥%,.0f")
+        _col_cfg = {
+            "maidNickname": st.column_config.TextColumn("メイド名", width="medium"),
+            "ご帰宅数":     st.column_config.NumberColumn("ご帰宅数"),
+            "有料数":       st.column_config.NumberColumn("有料数"),
+            "予約数":       st.column_config.NumberColumn("予約数"),
+            "ご帰宅売上":   _yen,
+            "チェキ売上":   _yen,
+            "合計売上":     _yen,
+            "平均単価":     _yen,
+        }
+        if "稼働時間数" in maid_df.columns:
+            _col_cfg["稼働時間数"]   = st.column_config.NumberColumn("稼働時間(h)", format="%.1f")
+            _col_cfg["遅刻合計分"]   = st.column_config.NumberColumn("遅刻(分)")
+            _col_cfg["平均ご帰宅数"] = st.column_config.NumberColumn("平均(/h)", format="%.2f")
+        st.dataframe(maid_df, column_config=_col_cfg,
+                     use_container_width=True, hide_index=True)
 
-    # ---- 時間帯・曜日 ----
-    st.divider()
-    st.subheader("時間帯・曜日別ご帰宅数")
+    # ============================================================
+    # 時間帯・曜日
+    # ============================================================
+    st.subheader("時間帯・曜日別")
     ca, cb = st.columns(2)
     with ca:
         hour_df = core.agg_by_hour(df_v)
-        fig = px.bar(hour_df, x="hour", y="ご帰宅数", text="ご帰宅数",
-                     color_discrete_sequence=[_CLR_PRIMARY], height=320,
-                     title="時間帯別（JST）")
-        fig.update_traces(textposition="outside")
-        fig.update_layout(xaxis_title="時", yaxis_title="",
-                          plot_bgcolor="#f9fafb", paper_bgcolor="white",
-                          margin=dict(t=40, b=40))
+        fig = vbar(hour_df, "hour", "ご帰宅数", color=BRAND, title="時間帯別（JST）")
+        fig.update_xaxes(dtick=1, title="時")
         st.plotly_chart(fig, use_container_width=True)
     with cb:
         wday_df = core.agg_by_weekday(df_v)
-        fig = px.bar(wday_df, x="weekday", y="ご帰宅数", text="ご帰宅数",
-                     color_discrete_sequence=["#8b5cf6"], height=320,
-                     title="曜日別")
-        fig.update_traces(textposition="outside")
-        fig.update_layout(xaxis_title="", yaxis_title="",
-                          plot_bgcolor="#f9fafb", paper_bgcolor="white",
-                          margin=dict(t=40, b=40))
+        fig = vbar(wday_df, "weekday", "ご帰宅数", color="#a78bfa", title="曜日別")
         st.plotly_chart(fig, use_container_width=True)
 
-    # ---- コース別 ----
+    # ============================================================
+    # コース別
+    # ============================================================
     st.subheader("コース別（チケット種別）")
     ticket_df = core.agg_by_ticket(df_v)
     ca, cb = st.columns([3, 2])
     with ca:
-        fig = px.bar(ticket_df, x="usedTicketItemId", y="件数", text="件数",
-                     color_discrete_sequence=["#f59e0b"], height=320)
-        fig.update_traces(textposition="outside")
-        fig.update_layout(xaxis_title="", yaxis_title="",
-                          plot_bgcolor="#f9fafb", paper_bgcolor="white",
-                          margin=dict(b=80))
+        fig = hbar(ticket_df, "usedTicketItemId", "件数",
+                   color="#f59e0b", title="チケット種別 件数")
         st.plotly_chart(fig, use_container_width=True)
     with cb:
         st.dataframe(
@@ -427,8 +563,9 @@ elif page == "お給仕実績":
             column_config={"売上": st.column_config.NumberColumn(format="¥%,.0f")},
             use_container_width=True, hide_index=True)
 
-    # ---- チェキ実績 ----
-    st.divider()
+    # ============================================================
+    # チェキ実績
+    # ============================================================
     st.subheader("チェキ実績")
     if df_c.empty:
         st.info("選択期間のチェキデータがありません。")
@@ -436,34 +573,30 @@ elif page == "お給仕実績":
         ca, cb = st.columns(2)
         with ca:
             if not cheki["by_maid"].empty:
-                fig = _bar(cheki["by_maid"], x="maidNickname", y="チェキ数",
-                           title="メイド別チェキ数", color="#ec4899")
+                fig = hbar(cheki["by_maid"], "maidNickname", "チェキ数",
+                           color="#ec4899", title="メイド別チェキ数")
                 st.plotly_chart(fig, use_container_width=True)
         with cb:
             if not cheki["daily"].empty:
-                fig = px.bar(cheki["daily"], x="date", y="チェキ数", text="チェキ数",
-                             color_discrete_sequence=["#ec4899"], height=380,
-                             title="日次チェキ数")
-                fig.update_traces(textposition="outside")
-                fig.update_layout(xaxis_title="", plot_bgcolor="#f9fafb",
-                                  paper_bgcolor="white", margin=dict(b=40))
+                dly = cheki["daily"].copy()
+                dly["date"] = dly["date"].astype(str)
+                fig = vbar(dly, "date", "チェキ数", color="#ec4899", title="日次チェキ数")
                 st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(cheki["by_maid"], use_container_width=True, hide_index=True)
 
 # ============================================================
 # 予約通知
 # ============================================================
 elif page == "予約通知（準備中）":
     st.title("予約通知")
-    st.info("準備中。Firestore `reservations` の rsvStatus 変化を検知してDiscordへ通知します。")
-    st.subheader("Discord 送信テスト")
+    st.info("準備中。Firestore `reservations` の rsvStatus 変化を検知して Discord へ通知します。")
     prod_banner()
+    st.subheader("Discord 送信テスト")
     ch  = st.text_input("送信先チャンネルID", value=secrets.get("discord_channel_id", ""))
     msg = st.text_input("テストメッセージ", value="【テスト】予約通知の送信確認です")
-    if st.button("送信テスト"):
+    if st.button("送信テスト", type="primary"):
         token = secrets.get("discord_bot_token")
         if not token:
-            st.error("Discordトークンが未設定です。")
+            st.error("Discord トークンが未設定です。")
         elif not ch:
             st.error("チャンネルIDを入力してください。")
         else:
@@ -474,8 +607,8 @@ elif page == "予約通知（準備中）":
 # シフト反映
 # ============================================================
 elif page == "シフト反映（準備中）":
-    st.title("シフト反映（本番Firestoreへ）")
-    st.info("準備中。シフト表.xlsx の日付シートを読み、本番Firestoreへ反映します。")
+    st.title("シフト反映（本番 Firestore へ）")
+    st.info("準備中。シフト表.xlsx の日付シートを読み、本番 Firestore へ反映します。")
     prod_banner()
 
     up = st.file_uploader("シフト表.xlsx を選択", type=["xlsx"])
@@ -490,12 +623,12 @@ elif page == "シフト反映（準備中）":
         st.error(f"読み込み失敗: {e}")
         st.stop()
     if not sheets:
-        st.warning("日付シート（YYYYMMDD）が見つかりません。")
+        st.warning("日付シート（YYYYMMDD 形式）が見つかりません。")
         st.stop()
 
     sheet = st.selectbox("反映する日付シート", sheets)
     df = core.load_shift_sheet(src, sheet)
-    st.write(f"プレビュー（{len(df)} 件）")
+    st.caption(f"{len(df)} 件")
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 # ============================================================
@@ -504,12 +637,16 @@ elif page == "シフト反映（準備中）":
 elif page == "設定":
     st.title("設定")
     st.subheader("秘密情報の読み込み状況")
-    st.table({
-        "項目": ["Discordトークン", "DiscordチャンネルID", "Firebase鍵パス"],
+    rows = {
+        "項目": ["Discord Bot トークン", "Discord チャンネルID", "Firebase 鍵パス"],
         "値": [
             core.mask(secrets.get("discord_bot_token", "")),
             secrets.get("discord_channel_id", "(未設定)"),
             secrets.get("firebase_key_path", "(未設定)"),
         ],
-    })
-    st.info("秘密情報は `secrets_local.json`（ローカル）または Streamlit Cloud の Secrets（クラウド）から読み込みます。")
+    }
+    st.table(rows)
+    st.info(
+        "秘密情報は `secrets_local.json`（ローカル）または "
+        "Streamlit Cloud の Secrets（クラウド）から読み込みます。"
+    )
