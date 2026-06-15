@@ -500,12 +500,19 @@ def cache_mtime(base_dir: Path, name: str, env: str):
 
 # ---- 集計 ----
 
+def _biz_date(dt) -> date:
+    """営業日付: 00:00〜01:59 は前日扱い（営業時間 19:00〜翌02:00）"""
+    if dt.hour < 2:
+        return (dt - timedelta(days=1)).date()
+    return dt.date()
+
+
 def agg_daily(df: pd.DataFrame) -> pd.DataFrame:
     """日次: 日付 / ご帰宅数(加重) / 有料数(加重) / 売上 / 平均単価"""
     d = df.copy()
     if "visitWeight" not in d.columns:
         d["visitWeight"] = 1
-    d["date"]        = d["enterDateTime"].dt.date
+    d["date"]        = d["enterDateTime"].apply(_biz_date)
     d["paid_weight"] = d["visitWeight"] * (d["type"] == "有料").astype(int)
     g = d.groupby("date").agg(
         ご帰宅数=("visitWeight",  "sum"),
