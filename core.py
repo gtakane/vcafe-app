@@ -295,9 +295,18 @@ def fetch_visits(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+def _ts_jst(ts):
+    """Firestore Timestamp → JST naive datetime。None はそのまま返す。"""
+    if ts is None:
+        return None
+    if hasattr(ts, "astimezone"):
+        return ts.astimezone(JST).replace(tzinfo=None)
+    return ts
+
+
 def fetch_workshifts(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame:
-    """workShiftGroups コレクショングループからシフト情報を取得。
-    openTime で期間フィルタし、maidNickname / roomId / maidId / openTime / closeTime を返す。
+    """workshifts コレクショングループからシフト情報を取得。
+    serveStartTime[0] / serveEndTime[-1] で実稼働時間・遅刻を計算できる形で返す。
     """
     q = db.collection_group("workshifts")
     q = q.where("openTime", ">=", start_jst)
@@ -305,14 +314,13 @@ def fetch_workshifts(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame
     rows = []
     for doc in q.stream():
         d = doc.to_dict()
-        open_t  = d.get("openTime")
-        close_t = d.get("closeTime")
+        open_t  = _ts_jst(d.get("openTime"))
+        close_t = _ts_jst(d.get("closeTime"))
         if open_t is None:
             continue
-        if hasattr(open_t, "astimezone"):
-            open_t  = open_t.astimezone(JST).replace(tzinfo=None)
-        if close_t is not None and hasattr(close_t, "astimezone"):
-            close_t = close_t.astimezone(JST).replace(tzinfo=None)
+        # serveStartTime / serveEndTime は配列フィールド
+        serve_starts = [_ts_jst(t) for t in (d.get("serveStartTime") or []) if t is not None]
+        serve_ends   = [_ts_jst(t) for t in (d.get("serveEndTime")   or []) if t is not None]
         rows.append({
             "shiftId":          doc.id,
             "roomId":           str(d.get("roomId") or ""),
@@ -321,14 +329,17 @@ def fetch_workshifts(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame
             "workshiftGroupId": str(d.get("workshiftGroupId") or ""),
             "openTime":         open_t,
             "closeTime":        close_t,
+            "serveStartTime":   serve_starts[0]  if serve_starts else None,
+            "serveEndTime":     serve_ends[-1]   if serve_ends   else None,
         })
     _COLS = ["shiftId", "roomId", "maidNickname", "maidId",
-             "workshiftGroupId", "openTime", "closeTime"]
+             "workshiftGroupId", "openTime", "closeTime",
+             "serveStartTime", "serveEndTime"]
     if not rows:
         return pd.DataFrame(columns=_COLS)
     df = pd.DataFrame(rows)
-    df["openTime"]  = pd.to_datetime(df["openTime"])
-    df["closeTime"] = pd.to_datetime(df["closeTime"])
+    for c in ["openTime", "closeTime", "serveStartTime", "serveEndTime"]:
+        df[c] = pd.to_datetime(df[c])
     return df.reset_index(drop=True)
 
 
@@ -388,46 +399,29 @@ def fetch_maid_admissions(db, df_shifts: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def calc_shift_detail(df_shifts: pd.DataFrame,
-                      df_admissions: pd.DataFrame) -> pd.DataFrame:
-    """シフト全件(df_shifts)を基準に、roomAdmissions の実入退室を LEFT JOIN して返す。
-    - admission がある: 最早 connectedTime〜最遅 exitTime を実稼働時間として使用
-    - admission がない: 予定の openTime〜closeTime を稼働時間として使用
-    - exitTime が NaT or connectedTime と同値: closeTime で補完
+def calc_shift_detail(df_shifts: pd.DataFrame) -> pd.DataFrame:
+    """workshifts の serveStartTime / serveEndTime から稼働時間・遅刻分を計算する。
+    - serveStartTime あり: 実際の開始時刻を使用（遅刻判定に使う）
+    - serveStartTime なし: openTime で代替（シフト未開始 or データなし）
+    - serveEndTime なし: closeTime で代替
     """
     _COLS = ["shiftId", "maidNickname", "openTime", "closeTime",
-             "connectedTime", "exitTime", "稼働時間", "遅刻分"]
+             "serveStartTime", "serveEndTime", "稼働時間", "遅刻分"]
     if df_shifts is None or df_shifts.empty:
         return pd.DataFrame(columns=_COLS)
 
     df = df_shifts.copy()
 
-    # admissions がある場合は shiftId で LEFT JOIN
-    if df_admissions is not None and not df_admissions.empty:
-        agg = (df_admissions.groupby("shiftId")
-               .agg(connectedTime=("connectedTime", "min"),
-                    exitTime=("exitTime",       "max"))
-               .reset_index())
-        df = df.merge(agg, on="shiftId", how="left")
-    else:
-        df["connectedTime"] = pd.NaT
-        df["exitTime"]      = pd.NaT
-
-    # 開始: connectedTime が NaT → openTime（予定）を使う
-    df["actual_start"] = df["connectedTime"].fillna(df["openTime"])
-    # 終了: exitTime が NaT or connectedTime と同値 → closeTime（予定）を使う
-    null_or_same = df["exitTime"].isna() | (df["exitTime"] == df["connectedTime"])
-    df["actual_end"] = df["exitTime"].copy()
-    df.loc[null_or_same, "actual_end"] = df.loc[null_or_same, "closeTime"]
+    # actual_start: serveStartTime がなければ openTime（予定）で代替
+    df["actual_start"] = df["serveStartTime"].fillna(df["openTime"])
+    # actual_end: serveEndTime がなければ closeTime（予定）で代替
+    df["actual_end"]   = df["serveEndTime"].fillna(df["closeTime"])
 
     df["稼働時間"] = ((df["actual_end"] - df["actual_start"])
                      .dt.total_seconds() / 3600).clip(lower=0)
+    # 遅刻: actual_start が openTime より後ろの場合のみ正の値
     df["遅刻分"]  = ((df["actual_start"] - df["openTime"])
                      .dt.total_seconds().clip(lower=0) / 60)
-
-    # connectedTime / exitTime を補完後の値で上書き
-    df["connectedTime"] = df["actual_start"]
-    df["exitTime"]      = df["actual_end"]
 
     return df[_COLS].reset_index(drop=True)
 

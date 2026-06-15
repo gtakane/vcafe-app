@@ -166,8 +166,7 @@ elif page == "お給仕実績":
                     core.save_cache(df_v, BASE, "visits", st.session_state.env)
                     core.save_cache(df_c, BASE, "cheki",  st.session_state.env)
                     df_ws  = core.fetch_workshifts(db, s_jst, e_jst)
-                    df_adm = core.fetch_maid_admissions(db, df_ws)
-                    df_sd  = core.calc_shift_detail(df_ws, df_adm)
+                    df_sd  = core.calc_shift_detail(df_ws)
                     core.save_cache(df_sd, BASE, "shifts", st.session_state.env)
                     st.success(
                         f"取得完了: ご帰宅 {len(df_v):,} 件 / チェキ {len(df_c):,} 件"
