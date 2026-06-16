@@ -1,84 +1,46 @@
-# V-Cafe 管理アプリ（ローカル版・骨組み）
+# Vあっと運営アプリ
 
-バーチャルあっとほぉーむカフェの各種ツールを1つに束ねるローカルアプリです。
-現状は **勤怠レポートの可視化** が動作し、他モジュール（お給仕実績／予約通知／シフト反映）は枠だけ用意しています。
+バーチャルあっとほぉーむカフェの内部管理ツールです。
 
----
+## 機能
 
-## 0. 用語（はじめての方へ）
+| 機能 | 状態 |
+|------|------|
+| 勤怠レポート可視化 | ✅ 完成 |
+| お給仕実績ダッシュボード（Firestore連携） | ✅ 完成 |
+| 予約通知（Firestore → Discord） | 🔧 開発中 |
+| シフト反映（xlsx → Firestore） | 🔧 開発中 |
 
-- **ターミナル**：黒い画面でコマンドを打つ窓。ここでは **WezTerm** を使います。
-- **シェル**：コマンドを解釈する中身（Windows標準は PowerShell）。WezTerm の中で動きます。
-- **Streamlit**：Python で作るブラウザ画面アプリ。`streamlit run app.py` で自分のPC内に立ち上がります（外部公開はされません）。
+## セットアップ
 
----
+別のPCや初めての環境でのセットアップ手順は **[SETUP.md](./SETUP.md)** を参照してください。
 
-## 1. 一度だけの準備（Windows）
+- **GitHub Codespaces（推奨）**：ブラウザだけで開発環境が整います
+- **Windows ローカル**：従来通り自分のPCに構築する方法
 
-### (a) WezTerm を入れる
-公式サイト wezterm.org から Windows 版インストーラを入れて実行するだけです。
-
-### (b) Python を入れる
-python.org から Python 3.11 以上を入れます。インストーラ画面で
-**「Add python.exe to PATH」に必ずチェック**を入れてください。
-
-### (c) このフォルダで環境を作る
-WezTerm を開き、このフォルダに移動します（例）。
+## クイックスタート（このPCで再起動する場合）
 
 ```powershell
-cd C:\Users\あなた\vcafe_app
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-> `.venv` はこのアプリ専用の隔離環境です。2回目以降は `.venv\Scripts\activate` だけでOK。
-
-### (d) 秘密情報を置く（**漏れた鍵は必ず先に Reset**）
-`secrets_local.example.json` を `secrets_local.json` という名前でコピーし、中身を
-**Reset後の新しい** Discordトークン等に書き換えます。このファイルは Git に上がりません。
-
-```powershell
-copy secrets_local.example.json secrets_local.json
-```
-
----
-
-## 2. 起動
-
-```powershell
+cd C:\Users\Owner\Desktop\vcafe_app
 .venv\Scripts\activate
 streamlit run app.py
 ```
 
-ブラウザが自動で開きます。閉じる時は WezTerm で `Ctrl + C`。
+## ファイル構成
 
----
+```
+vcafe_app/
+├── app.py                   # 画面（Streamlit）
+├── core.py                  # データ処理・Firestore・Discord 送信
+├── requirements.txt         # Python パッケージ一覧
+├── secrets_local.json       # 秘密情報（Gitに上がらない）
+├── serviceAccountKey.json   # Firebase 鍵（Gitに上がらない）
+├── data/                    # キャッシュファイル置き場
+├── .devcontainer/           # GitHub Codespaces 設定
+└── .streamlit/              # Streamlit テーマ設定
+```
 
-## 3. 使い方（現状）
+## セキュリティ
 
-- **勤怠レポート**：`kintai_report.py` が出力した `勤怠レポート_YYYY-MM.xlsx` を
-  画面から選ぶ（または `data/` に置く）と、KPI・欠勤率ランキング・一覧が出ます。
-- **設定**：トークン等の読み込み状況をマスク表示で確認できます。
-- **サイドバーのテスト/本番スイッチ**：本番を選ぶと警告が出ます。
-  書き込み系（シフト反映など）は本番時に確認入力を要求する設計です。
-
----
-
-## 4. セキュリティの約束
-
-- 秘密情報（Botトークン／Firebase鍵）は **コードに直書きしない**。
-  `secrets_local.json` か環境変数から読み、どちらも `.gitignore` 済み。
-- 一度どこかに貼った鍵・トークンは**漏洩扱い**にして Reset/再生成する。
-- 本番書き込みは **dry-run と確認入力** を通してから。
-
----
-
-## 5. これから足すもの
-
-1. お給仕実績ダッシュボード（ご帰宅ログ取込）
-2. 予約通知：Firestore `reservations` の `rsvStatus` false→true を検知してメイドへDM
-3. シフト反映：`シフト表.xlsx` → 本番Firestore（GAS置き換え、firebase-admin + dry-run）
-
-`core.py` にデータ処理・Discord送信・秘密情報読み込みの中核をまとめてあります。
-画面は `app.py`。機能追加は基本この2ファイルに足していきます。
+- `secrets_local.json` と `serviceAccountKey.json` は `.gitignore` で除外済み
+- 鍵が漏洩した場合は Discord Developer Portal / Firebase Console で**即座に再発行**する
