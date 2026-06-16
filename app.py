@@ -32,8 +32,14 @@ st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap');
 
-html, body, [class*="css"], .stApp, .stMarkdown, p, span, label {{
+html, body, [class*="css"], .stApp, .stMarkdown, p, label {{
     font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', sans-serif !important;
+}}
+
+/* カレンダーポップアップのフォントを明示指定（span を個別に当てて衝突を防ぐ） */
+[data-baseweb="calendar"] span,
+[data-baseweb="calendar"] div {{
+    font-family: 'Noto Sans JP', 'Yu Gothic UI', 'Hiragino Kaku Gothic ProN', sans-serif !important;
 }}
 
 .stApp {{ background-color: {BG} !important; }}

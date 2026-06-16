@@ -35,6 +35,13 @@ def load_secrets(base_dir: Path) -> dict:
         v = os.environ.get(env_key)
         if v:
             secrets[conf_key] = v
+    # FIREBASE_KEY_JSON 環境変数（Codespaces シークレット等）から JSON を直接読む
+    firebase_json_str = os.environ.get("FIREBASE_KEY_JSON", "")
+    if firebase_json_str:
+        try:
+            secrets["firebase_key_json"] = json.loads(firebase_json_str)
+        except Exception:
+            pass
     return secrets
 
 
