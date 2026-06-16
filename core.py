@@ -6,7 +6,7 @@ Streamlit に依存しないので、単体でテスト・再利用できる。
 import os
 import json
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 
 import pandas as pd
@@ -18,31 +18,14 @@ import pandas as pd
 #   ※ コードに直書きしない。secrets_local.json は .gitignore 済み。
 # ============================================================
 def load_secrets(base_dir: Path) -> dict:
-    """秘密情報を読み込む。優先順位:
-    1. 環境変数
-    2. st.secrets（Streamlit Community Cloud）
-    3. secrets_local.json（ローカル開発）
-    """
     secrets = {}
-    # ローカルファイルから読む
     f = base_dir / "secrets_local.json"
     if f.exists():
         try:
-            secrets = json.loads(f.read_text(encoding="utf-8-sig"))
+            secrets = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             secrets = {}
-    # Streamlit Community Cloud の st.secrets があれば上書き
-    try:
-        import streamlit as st
-        for k in ("discord_bot_token", "discord_channel_id",
-                  "firebase_key_path", "firebase_key_json"):
-            if k in st.secrets:
-                v = st.secrets[k]
-                # st.secrets のネストされたオブジェクト（TOML テーブル）は dict に変換
-                secrets[k] = dict(v) if hasattr(v, "keys") else v
-    except Exception:
-        pass
-    # 環境変数が最優先
+    # 環境変数があれば上書き（環境変数を最優先）
     env_map = {
         "DISCORD_BOT_TOKEN": "discord_bot_token",
         "DISCORD_CHANNEL_ID": "discord_channel_id",
@@ -155,25 +138,19 @@ def send_discord_message(token: str, channel_id: str, content: str) -> tuple:
 # ============================================================
 JST = timezone(timedelta(hours=9))
 FREE_TICKET_IDS  = frozenset({"trial10minutes"})
-TICKET_PRICES = {           # usedTicketItemId → 円（固定価格）
+TICKET_PRICES = {
     "gokitaku30minutes": 840,
     "premiumGokitaku1":  960,
     "luckyGokitaku":     650,
 }
-RESERVATION_PRICE = 3920    # roomType == "reservation" の固定価格
-CHEKI_PRICE       = 500     # チェキ1枚
+RESERVATION_PRICE = 3920
+CHEKI_PRICE       = 500
 PAID_TICKET_IDS   = frozenset(TICKET_PRICES.keys())
 _WEEKDAY_JP = ["月", "火", "水", "木", "金", "土", "日"]
 
 
 def _calc_revenue(ticket_id: str, billed_coin: int, billed_reward: int,
                   room_type: str, is_test: bool) -> float:
-    """usedTicketItemId・roomType から売上（円）を返す。
-    - testUser=true              → ¥0（テストユーザー）
-    - reservation 枠             → ¥3,920 固定
-    - 固定価格チケット             → TICKET_PRICES の値
-    - ATCOIN/リワードポイント払い  → (billedCoin + billedRewardPoint) × 1.4
-    """
     if is_test:
         return 0.0
     if room_type == "reservation":
@@ -190,12 +167,6 @@ def _classify_type(ticket_id: str, is_test: bool) -> str:
 
 
 def get_firestore_client(secrets: dict, base_dir: Path, env: str = "テスト"):
-    """firebase-admin を初期化して Firestore クライアントを返す。
-    同一 env の app は再利用（Streamlit の再実行でも initialize_app を二重呼びしない）。
-    認証情報の優先順位:
-      1. secrets["firebase_key_json"] (dict) — Streamlit Community Cloud の st.secrets から
-      2. secrets["firebase_key_path"] (str)  — ローカルのファイルパスから
-    """
     try:
         import firebase_admin
         from firebase_admin import credentials, firestore as fb_fs
@@ -208,7 +179,6 @@ def get_firestore_client(secrets: dict, base_dir: Path, env: str = "テスト"):
     try:
         app = firebase_admin.get_app(app_name)
     except ValueError:
-        # インラインJSON（クラウドデプロイ）を優先
         key_json = secrets.get("firebase_key_json")
         if key_json and isinstance(key_json, dict):
             cred = credentials.Certificate(key_json)
@@ -226,15 +196,11 @@ def get_firestore_client(secrets: dict, base_dir: Path, env: str = "テスト"):
 
 
 def fetch_visits(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame:
-    """userRecordVisits コレクショングループから期間内のご帰宅を取得。
-    enterDateTime は UTC タイムスタンプ → JST に変換して返す。
-    インデックス未作成の場合、例外メッセージに Firestore コンソール URL が含まれる。
-    """
     start_utc = start_jst.astimezone(timezone.utc)
-    end_utc = end_jst.astimezone(timezone.utc)
-    q = db.collection_group("userRecordVisits")
-    q = q.where("enterDateTime", ">=", start_utc)
-    q = q.where("enterDateTime", "<", end_utc)
+    end_utc   = end_jst.astimezone(timezone.utc)
+    q = (db.collection_group("userRecordVisits")
+           .where("enterDateTime", ">=", start_utc)
+           .where("enterDateTime", "<",  end_utc))
 
     rows = []
     for doc in q.stream():
@@ -244,35 +210,34 @@ def fetch_visits(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame:
             continue
         if getattr(enter, "tzinfo", None) is None:
             enter = enter.replace(tzinfo=timezone.utc)
-        enter_jst = enter.astimezone(JST)
+        enter_jst     = enter.astimezone(JST)
         billed        = int(d.get("billedCoin") or 0)
         billed_reward = int(d.get("billedRewardPoint") or 0)
         ticket        = str(d.get("usedTicketItemId") or "ATCOIN")
         room_type     = str(d.get("roomType") or "")
         init_time     = int(d.get("initialTime") or 20)
-        weight        = max(1, round(init_time / 20))  # 20分=1, 40分=2
+        weight        = max(1, round(init_time / 20))
         rows.append({
-            "doc_id":             doc.id,
-            "userId":             doc.reference.parent.parent.id,
-            "enterDateTime":      enter_jst.replace(tzinfo=None),
-            "maidNickname":       str(d.get("maidNickname") or ""),
-            "billedCoin":         billed,
-            "billedRewardPoint":  billed_reward,
-            "usedTicketItemId":   ticket,
-            "roomType":           room_type,
-            "initialTime":        init_time,
-            "visitWeight":        weight,
-            "revenue":            0.0,   # testUser 確認後に更新
-            "type":               "",    # testUser 確認後に更新
+            "doc_id":            doc.id,
+            "userId":            doc.reference.parent.parent.id,
+            "enterDateTime":     enter_jst.replace(tzinfo=None),
+            "maidNickname":      str(d.get("maidNickname") or ""),
+            "billedCoin":        billed,
+            "billedRewardPoint": billed_reward,
+            "usedTicketItemId":  ticket,
+            "roomType":          room_type,
+            "initialTime":       init_time,
+            "visitWeight":       weight,
+            "revenue":           0.0,
+            "type":              "",
         })
 
-    _VISIT_COLS = ["doc_id", "userId", "enterDateTime", "maidNickname",
-                   "billedCoin", "billedRewardPoint", "usedTicketItemId", "roomType",
-                   "initialTime", "visitWeight", "revenue", "type"]
+    _COLS = ["doc_id", "userId", "enterDateTime", "maidNickname",
+             "billedCoin", "billedRewardPoint", "usedTicketItemId", "roomType",
+             "initialTime", "visitWeight", "revenue", "type"]
     if not rows:
-        return pd.DataFrame(columns=_VISIT_COLS)
+        return pd.DataFrame(columns=_COLS)
 
-    # users/{userId} を一括取得してテストユーザーを判定
     unique_uids = list({r["userId"] for r in rows if r["userId"]})
     test_user_ids: set = set()
     try:
@@ -296,7 +261,6 @@ def fetch_visits(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame:
 
 
 def _ts_jst(ts):
-    """Firestore Timestamp → JST naive datetime。None はそのまま返す。"""
     if ts is None:
         return None
     if hasattr(ts, "astimezone"):
@@ -305,12 +269,9 @@ def _ts_jst(ts):
 
 
 def fetch_workshifts(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame:
-    """workshifts コレクショングループからシフト情報を取得。
-    serveStartTime[0] / serveEndTime[-1] で実稼働時間・遅刻を計算できる形で返す。
-    """
-    q = db.collection_group("workshifts")
-    q = q.where("openTime", ">=", start_jst)
-    q = q.where("openTime", "<", end_jst)
+    q = (db.collection_group("workshifts")
+           .where("openTime", ">=", start_jst)
+           .where("openTime", "<",  end_jst))
     rows = []
     for doc in q.stream():
         d = doc.to_dict()
@@ -318,7 +279,6 @@ def fetch_workshifts(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame
         close_t = _ts_jst(d.get("closeTime"))
         if open_t is None:
             continue
-        # serveStartTime / serveEndTime は配列フィールド
         serve_starts = [_ts_jst(t) for t in (d.get("serveStartTime") or []) if t is not None]
         serve_ends   = [_ts_jst(t) for t in (d.get("serveEndTime")   or []) if t is not None]
         rows.append({
@@ -329,8 +289,8 @@ def fetch_workshifts(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame
             "workshiftGroupId": str(d.get("workshiftGroupId") or ""),
             "openTime":         open_t,
             "closeTime":        close_t,
-            "serveStartTime":   serve_starts[0]  if serve_starts else None,
-            "serveEndTime":     serve_ends[-1]   if serve_ends   else None,
+            "serveStartTime":   serve_starts[0] if serve_starts else None,
+            "serveEndTime":     serve_ends[-1]  if serve_ends   else None,
         })
     _COLS = ["shiftId", "roomId", "maidNickname", "maidId",
              "workshiftGroupId", "openTime", "closeTime",
@@ -343,91 +303,22 @@ def fetch_workshifts(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame
     return df.reset_index(drop=True)
 
 
-def fetch_maid_admissions(db, df_shifts: pd.DataFrame) -> pd.DataFrame:
-    """各シフトの rooms/{roomId}/roomAdmissions からメイドの入退室記録を取得。
-    roomAdmissions.userId == workShiftGroups.maidId で突合する。
-    メイドが再接続した場合、1シフトに複数ドキュメントが存在しうる（calc_shift_detail で集約）。
-    """
-    rows = []
-    for _, shift in df_shifts.iterrows():
-        room_id = shift["roomId"]
-        maid_id = shift["maidId"]
-        if not room_id or not maid_id:
-            continue
-        try:
-            docs = (db.collection("rooms").document(room_id)
-                    .collection("roomAdmissions")
-                    .where("userId", "==", maid_id)
-                    .stream())
-            shift_open  = shift["openTime"]
-            shift_close = shift["closeTime"]
-            tol = timedelta(hours=1)
-            for doc in docs:
-                d = doc.to_dict()
-                connected = d.get("connectedTime")
-                exit_t    = d.get("exitTime")
-                if connected is None:
-                    continue
-                if hasattr(connected, "astimezone"):
-                    connected = connected.astimezone(JST).replace(tzinfo=None)
-                if exit_t is not None and hasattr(exit_t, "astimezone"):
-                    exit_t = exit_t.astimezone(JST).replace(tzinfo=None)
-                # このシフトの時間帯（±1時間の余裕）に入室した記録のみ対象
-                if pd.notna(shift_close) and (
-                    connected < shift_open - tol or connected > shift_close + tol
-                ):
-                    continue
-                rows.append({
-                    "shiftId":       shift["shiftId"],
-                    "roomId":        room_id,
-                    "maidId":        maid_id,
-                    "maidNickname":  shift["maidNickname"],
-                    "openTime":      shift["openTime"],
-                    "closeTime":     shift["closeTime"],
-                    "connectedTime": connected,
-                    "exitTime":      exit_t,
-                })
-        except Exception:
-            pass
-    _COLS = ["shiftId", "roomId", "maidId", "maidNickname",
-             "openTime", "closeTime", "connectedTime", "exitTime"]
-    if not rows:
-        return pd.DataFrame(columns=_COLS)
-    df = pd.DataFrame(rows)
-    for c in ["openTime", "closeTime", "connectedTime", "exitTime"]:
-        df[c] = pd.to_datetime(df[c])
-    return df.reset_index(drop=True)
-
-
 def calc_shift_detail(df_shifts: pd.DataFrame) -> pd.DataFrame:
-    """workshifts の serveStartTime / serveEndTime から稼働時間・遅刻分を計算する。
-    - serveStartTime あり: 実際の開始時刻を使用（遅刻判定に使う）
-    - serveStartTime なし: openTime で代替（シフト未開始 or データなし）
-    - serveEndTime なし: closeTime で代替
-    """
     _COLS = ["shiftId", "maidNickname", "openTime", "closeTime",
              "serveStartTime", "serveEndTime", "稼働時間", "遅刻分"]
     if df_shifts is None or df_shifts.empty:
         return pd.DataFrame(columns=_COLS)
-
     df = df_shifts.copy()
-
-    # actual_start: serveStartTime がなければ openTime（予定）で代替
     df["actual_start"] = df["serveStartTime"].fillna(df["openTime"])
-    # actual_end: serveEndTime がなければ closeTime（予定）で代替
     df["actual_end"]   = df["serveEndTime"].fillna(df["closeTime"])
-
     df["稼働時間"] = ((df["actual_end"] - df["actual_start"])
                      .dt.total_seconds() / 3600).clip(lower=0)
-    # 遅刻: actual_start が openTime より後ろの場合のみ正の値
     df["遅刻分"]  = ((df["actual_start"] - df["openTime"])
                      .dt.total_seconds().clip(lower=0) / 60)
-
     return df[_COLS].reset_index(drop=True)
 
 
 def agg_shift_hours(df_detail: pd.DataFrame) -> pd.DataFrame:
-    """calc_shift_detail の出力をメイド別に集計して返す。"""
     if df_detail is None or df_detail.empty:
         return pd.DataFrame(columns=["maidNickname", "稼働時間数", "遅刻合計分", "シフト数"])
     return (df_detail.groupby("maidNickname")
@@ -438,32 +329,26 @@ def agg_shift_hours(df_detail: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_cheki(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame:
-    """userAlbum コレクショングループから期間内のチェキを取得。
-    date フィールドは JST タイムスタンプとしてフィルタし、ナイーブ datetime で返す。
-    """
-    q = db.collection_group("userAlbum")
-    q = q.where("date", ">=", start_jst)
-    q = q.where("date", "<", end_jst)
-
+    q = (db.collection_group("userAlbum")
+           .where("date", ">=", start_jst)
+           .where("date", "<",  end_jst))
     rows = []
     for doc in q.stream():
         d = doc.to_dict()
         dt = d.get("date")
         if dt is None:
             continue
-        # Firestore Timestamp → python datetime（tzinfo を除去してナイーブ JST 扱い）
         if hasattr(dt, "astimezone"):
             dt = dt.astimezone(JST).replace(tzinfo=None)
         rows.append({
-            "doc_id": doc.id,
-            "userId": doc.reference.parent.parent.id,
-            "date": dt,
+            "doc_id":       doc.id,
+            "userId":       doc.reference.parent.parent.id,
+            "date":         dt,
             "maidNickname": str(d.get("maidNickname") or ""),
         })
-
-    _CHEKI_COLS = ["doc_id", "userId", "date", "maidNickname"]
+    _COLS = ["doc_id", "userId", "date", "maidNickname"]
     if not rows:
-        return pd.DataFrame(columns=_CHEKI_COLS)
+        return pd.DataFrame(columns=_COLS)
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"])
     return df.reset_index(drop=True)
@@ -483,7 +368,6 @@ def save_cache(df: pd.DataFrame, base_dir: Path, name: str, env: str) -> None:
 
 
 def load_cache(base_dir: Path, name: str, env: str):
-    """キャッシュ parquet を読む。存在しなければ None を返す。"""
     p = _cache_path(base_dir, name, env)
     if not p.exists():
         return None
@@ -491,7 +375,6 @@ def load_cache(base_dir: Path, name: str, env: str):
 
 
 def cache_mtime(base_dir: Path, name: str, env: str):
-    """キャッシュの最終更新 datetime（ローカル時刻）。なければ None。"""
     p = _cache_path(base_dir, name, env)
     if not p.exists():
         return None
@@ -501,40 +384,33 @@ def cache_mtime(base_dir: Path, name: str, env: str):
 # ---- 集計 ----
 
 def _biz_date(dt) -> date:
-    """営業日付: 00:00〜01:59 は前日扱い（営業時間 19:00〜翌02:00）"""
+    """00:00〜01:59 は前日扱い（営業時間 19:00〜翌02:00）"""
     if dt.hour < 2:
         return (dt - timedelta(days=1)).date()
     return dt.date()
 
 
 def agg_daily(df: pd.DataFrame) -> pd.DataFrame:
-    """日次: 日付 / ご帰宅数(加重) / 有料数(加重) / 売上 / 平均単価"""
     d = df.copy()
     if "visitWeight" not in d.columns:
         d["visitWeight"] = 1
     d["date"]        = d["enterDateTime"].apply(_biz_date)
     d["paid_weight"] = d["visitWeight"] * (d["type"] == "有料").astype(int)
     g = d.groupby("date").agg(
-        ご帰宅数=("visitWeight",  "sum"),
-        有料数=("paid_weight",   "sum"),
-        売上=("revenue",        "sum"),
+        ご帰宅数=("visitWeight", "sum"),
+        有料数=("paid_weight",  "sum"),
+        売上=("revenue",       "sum"),
     ).reset_index()
     g["ご帰宅数"] = g["ご帰宅数"].astype(int)
     g["有料数"]   = g["有料数"].astype(int)
     g["平均単価"] = g.apply(
-        lambda r: r["売上"] / r["有料数"] if r["有料数"] > 0 else 0.0, axis=1
-    )
+        lambda r: r["売上"] / r["有料数"] if r["有料数"] > 0 else 0.0, axis=1)
     return g
 
 
 def agg_by_maid(df_visits: pd.DataFrame,
                 df_cheki: pd.DataFrame = None,
                 df_shift_hours: pd.DataFrame = None) -> pd.DataFrame:
-    """メイド別集計。
-    ご帰宅数 / 有料数: initialTime 基準の加重カウント（20分=1, 40分=2）。
-    予約数: 予約入室の実件数（加重なし）。
-    平均ご帰宅数: 予約を除いた加重ご帰宅数 ÷ 稼働時間数。
-    """
     d = df_visits.copy()
     if "visitWeight" not in d.columns:
         d["visitWeight"] = 1
@@ -542,27 +418,27 @@ def agg_by_maid(df_visits: pd.DataFrame,
     d["non_rsv_weight"] = d["visitWeight"] * (d["roomType"] != "reservation").astype(int)
 
     g = d.groupby("maidNickname").agg(
-        ご帰宅数=("visitWeight",    "sum"),
-        有料数=("paid_weight",     "sum"),
-        予約数=("roomType",        lambda s: (s == "reservation").sum()),
-        ご帰宅売上=("revenue",     "sum"),
+        ご帰宅数=("visitWeight",     "sum"),
+        有料数=("paid_weight",      "sum"),
+        予約数=("roomType",         lambda s: (s == "reservation").sum()),
+        ご帰宅売上=("revenue",      "sum"),
         _non_rsv=("non_rsv_weight", "sum"),
     ).reset_index()
     g["ご帰宅数"] = g["ご帰宅数"].astype(int)
     g["有料数"]   = g["有料数"].astype(int)
     g["予約数"]   = g["予約数"].astype(int)
     g["平均単価"] = g.apply(
-        lambda r: r["ご帰宅売上"] / r["有料数"] if r["有料数"] > 0 else 0.0, axis=1
-    )
+        lambda r: r["ご帰宅売上"] / r["有料数"] if r["有料数"] > 0 else 0.0, axis=1)
+
     if df_cheki is not None and not df_cheki.empty:
-        cheki_cnt = (df_cheki.groupby("maidNickname")
-                     .size().reset_index(name="チェキ数"))
+        cheki_cnt = df_cheki.groupby("maidNickname").size().reset_index(name="チェキ数")
         g = g.merge(cheki_cnt, on="maidNickname", how="left")
         g["チェキ数"] = g["チェキ数"].fillna(0).astype(int)
     else:
         g["チェキ数"] = 0
     g["チェキ売上"] = g["チェキ数"] * CHEKI_PRICE
     g["合計売上"]   = g["ご帰宅売上"] + g["チェキ売上"]
+
     if df_shift_hours is not None and not df_shift_hours.empty:
         sh = df_shift_hours[["maidNickname", "稼働時間数", "遅刻合計分"]].copy()
         g = g.merge(sh, on="maidNickname", how="left")
@@ -570,14 +446,12 @@ def agg_by_maid(df_visits: pd.DataFrame,
         g["遅刻合計分"] = g["遅刻合計分"].fillna(0).round(0).astype(int)
         g["平均ご帰宅数"] = g.apply(
             lambda r: round(r["_non_rsv"] / r["稼働時間数"], 2)
-            if r["稼働時間数"] > 0 else 0.0, axis=1
-        )
+            if r["稼働時間数"] > 0 else 0.0, axis=1)
     g = g.drop(columns=["_non_rsv"])
     return g.sort_values("ご帰宅数", ascending=False).reset_index(drop=True)
 
 
 def agg_by_hour(df: pd.DataFrame) -> pd.DataFrame:
-    """時間帯別ご帰宅数（加重、0〜23 全時間帯を埋める）"""
     d = df.copy()
     if "visitWeight" not in d.columns:
         d["visitWeight"] = 1
@@ -588,46 +462,37 @@ def agg_by_hour(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def agg_by_weekday(df: pd.DataFrame) -> pd.DataFrame:
-    """曜日別ご帰宅数（加重、月→日 順）"""
     d = df.copy()
     if "visitWeight" not in d.columns:
         d["visitWeight"] = 1
     d["weekday_num"] = d["enterDateTime"].dt.weekday
-    d["weekday"] = d["weekday_num"].map(lambda x: _WEEKDAY_JP[x])
-    return (
-        d.groupby(["weekday_num", "weekday"])
-        .agg(ご帰宅数=("visitWeight", "sum"))
-        .reset_index()
-        .sort_values("weekday_num")[["weekday", "ご帰宅数"]]
-        .reset_index(drop=True)
-    )
+    d["weekday"]     = d["weekday_num"].map(lambda x: _WEEKDAY_JP[x])
+    return (d.groupby(["weekday_num", "weekday"])
+             .agg(ご帰宅数=("visitWeight", "sum"))
+             .reset_index()
+             .sort_values("weekday_num")[["weekday", "ご帰宅数"]]
+             .reset_index(drop=True))
 
 
 def agg_by_ticket(df: pd.DataFrame) -> pd.DataFrame:
-    """コース(usedTicketItemId)別 件数（加重）・売上（降順）"""
     d = df.copy()
     if "visitWeight" not in d.columns:
         d["visitWeight"] = 1
-    return (
-        d.groupby("usedTicketItemId")
-        .agg(件数=("visitWeight", "sum"), 売上=("revenue", "sum"))
-        .reset_index()
-        .sort_values("件数", ascending=False)
-        .astype({"件数": int})
-        .reset_index(drop=True)
-    )
+    return (d.groupby("usedTicketItemId")
+             .agg(件数=("visitWeight", "sum"), 売上=("revenue", "sum"))
+             .reset_index()
+             .sort_values("件数", ascending=False)
+             .astype({"件数": int})
+             .reset_index(drop=True))
 
 
 def agg_cheki(df_cheki: pd.DataFrame, df_visits: pd.DataFrame) -> dict:
-    """チェキ集計: 総数・装着率・メイド別・日次"""
-    total = len(df_cheki)
+    total  = len(df_cheki)
     visits = len(df_visits)
-    by_maid = (
-        df_cheki.groupby("maidNickname").size()
-        .reset_index(name="チェキ数")
-        .sort_values("チェキ数", ascending=False)
-        .reset_index(drop=True)
-    )
+    by_maid = (df_cheki.groupby("maidNickname").size()
+               .reset_index(name="チェキ数")
+               .sort_values("チェキ数", ascending=False)
+               .reset_index(drop=True))
     if not df_cheki.empty:
         tmp = df_cheki.copy()
         tmp["date"] = pd.to_datetime(tmp["date"]).dt.date
@@ -635,11 +500,11 @@ def agg_cheki(df_cheki: pd.DataFrame, df_visits: pd.DataFrame) -> dict:
     else:
         daily = pd.DataFrame(columns=["date", "チェキ数"])
     return {
-        "total": total,
-        "visits": visits,
-        "rate": total / visits if visits > 0 else 0.0,
+        "total":   total,
+        "visits":  visits,
+        "rate":    total / visits if visits > 0 else 0.0,
         "by_maid": by_maid,
-        "daily": daily,
+        "daily":   daily,
     }
 
 
