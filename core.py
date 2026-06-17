@@ -22,7 +22,8 @@ def load_secrets(base_dir: Path) -> dict:
     f = base_dir / "secrets_local.json"
     if f.exists():
         try:
-            secrets = json.loads(f.read_text(encoding="utf-8"))
+            # メモ帳等で保存すると UTF-8 BOM が付くことがあるため utf-8-sig で読む
+            secrets = json.loads(f.read_text(encoding="utf-8-sig"))
         except Exception:
             secrets = {}
     # 環境変数があれば上書き（環境変数を最優先）

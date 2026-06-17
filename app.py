@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import re
 from datetime import datetime, date, time
 from pathlib import Path
@@ -275,8 +276,23 @@ def vbar(df, x_col, y_col, color=PINK, title="", text_fmt=None, height=260):
 
 # ============================================================
 # 秘密情報・セッション初期化
+#   優先順位: 環境変数 > secrets_local.json > Streamlit Cloud の Secrets
+#   ※ Streamlit Cloud では secrets_local.json を配置できないため、
+#     ここで st.secrets の値を補完する（core.py は Streamlit に依存させない）。
 # ============================================================
 secrets = core.load_secrets(BASE)
+try:
+    cloud_secrets = st.secrets
+    for _k in ("discord_bot_token", "discord_channel_id", "firebase_key_path"):
+        if not secrets.get(_k) and _k in cloud_secrets:
+            secrets[_k] = cloud_secrets[_k]
+    if not secrets.get("firebase_key_json") and "firebase_key_json" in cloud_secrets:
+        raw = cloud_secrets["firebase_key_json"]
+        # [firebase_key_json] テーブル形式・JSON文字列形式のどちらでも読めるようにする
+        secrets["firebase_key_json"] = json.loads(raw) if isinstance(raw, str) else dict(raw)
+except Exception:
+    pass
+
 if "env" not in st.session_state:
     st.session_state.env = "テスト"
 
