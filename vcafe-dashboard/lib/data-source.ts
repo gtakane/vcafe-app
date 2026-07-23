@@ -30,7 +30,7 @@ export async function loadAnalyticsData(query: DataQuery): Promise<AnalyticsData
     query: `
       WITH selected_visits AS (
         SELECT * FROM \`${projectId}.${dataset}.visits_current\`
-        WHERE at BETWEEN @startAt AND @endAt ${maidWhere}
+        WHERE \`at\` BETWEEN @startAt AND @endAt ${maidWhere}
       ), selected_shifts AS (
         SELECT * FROM \`${projectId}.${dataset}.shifts_current\`
         WHERE scheduledStart BETWEEN @startAt AND @endAt ${maidWhere}
