@@ -44,3 +44,22 @@ docker build -f services/analytics-sync/Dockerfile -t vcafe-analytics-sync .
 ```
 
 本番で動かす前に、分析用の複製プロジェクトまたはエミュレーターで`DRY_RUN=true`の件数確認を行います。
+
+## 本番非接続の初回デプロイ
+
+`deploy-disabled-job-tokyo.sh`は、管理・分析用プロジェクトに停止状態のCloud Run Jobを作成します。
+
+- 配置先は`vcafe-admin-analytics`、リージョンは`asia-northeast1`に固定しています。
+- `CONFIRM_READ_ONLY_SYNC=DISABLED`のため、誤って手動実行してもFirestore接続前に終了します。
+- 本番プロジェクトへのIAM付与は行いません。
+- Cloud Schedulerは作成せず、デプロイ後にジョブを実行しません。
+- `DRY_RUN=true`、15分、100件の最小設定を保持します。
+
+リポジトリルートから次を実行します。
+
+```bash
+chmod +x services/analytics-sync/deploy-disabled-job-tokyo.sh
+./services/analytics-sync/deploy-disabled-job-tokyo.sh
+```
+
+本番読み取りを有効化する変更は、この初回デプロイとは分離してレビューしてください。
