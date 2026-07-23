@@ -1,0 +1,20 @@
+{
+  "hosting": {
+    "public": "hosting-public",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": {
+          "serviceId": "vcafe-dashboard",
+          "region": "asia-northeast1",
+          "pinTag": true
+        }
+      }
+    ]
+  }
+}

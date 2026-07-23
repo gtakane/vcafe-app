@@ -1,0 +1,15 @@
+{
+  "name": "vcafe-analytics-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --import=tsx src/index.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@google-cloud/bigquery": "^8.1.1",
+    "firebase-admin": "^13.4.0",
+    "tsx": "^4.20.3"
+  }
+}
