@@ -1,6 +1,6 @@
 # Vあっと Analytics
 
-Streamlit版を置き換える、Next.js + Firebase App Hosting向けの管理ダッシュボードです。メイド実績、勤怠、ユーザーデータベース、メイド×ユーザー分析を一つにまとめます。
+Streamlit版を置き換える、Next.js + Firebase Hosting + Cloud Run向けの管理ダッシュボードです。メイド実績、勤怠、ユーザーデータベース、メイド×ユーザー分析を一つにまとめます。
 
 確定済みのプロジェクトIDと環境分離は`docs/project-config.md`を参照してください。
 
@@ -62,6 +62,8 @@ BigQueryデータセットには次のビューまたはテーブルを用意し
 
 `services/analytics-sync`に、本番Firestoreを読み取り専用IAMで参照して別プロジェクトのBigQueryへ同期するCloud Run Jobを収録しています。確認フラグ、24時間上限、件数上限、プロジェクト分離、既定ドライラン、ユーザーIDの不可逆変換を実装しています。コードを配置しただけでは本番接続も同期も実行されません。
 
-## App Hosting
+## 東京リージョンへのデプロイ
 
-`apphosting.yaml`は本番向けに認証とBigQueryを必須にしています。デプロイ前にSecret ManagerまたはApp Hosting設定でFirebase公開設定とBigQueryプロジェクト／データセットを設定してください。
+Firebase Hostingを公開CDNとして使用し、すべてのアプリケーションリクエストを東京リージョン（`asia-northeast1`）のCloud Runへ転送します。Cloud Runは`min=0`、`max=3`で構成し、管理・分析用プロジェクト`vcafe-admin-analytics`にのみ権限を持つ専用サービスアカウントで実行します。
+
+手順は`docs/deployment-tokyo.md`を参照してください。

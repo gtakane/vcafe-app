@@ -1,0 +1,13 @@
+.next
+node_modules
+npm-debug.log
+.env
+.env.*
+!.env.example
+.firebase
+serviceAccountKey*.json
+.git
+.gitignore
+docs
+services
+tests

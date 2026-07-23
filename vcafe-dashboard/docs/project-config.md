@@ -5,7 +5,7 @@
 |既存の本番Firebase|`v-athome-cafe-app`|
 |新規の管理・分析用Firebase / Google Cloud|`vcafe-admin-analytics`|
 
-FirebaseプロジェクトはGoogle Cloudプロジェクトでもあるため、管理用Firestore、Firebase Authentication、Firebase App Hosting、BigQuery、Cloud Runは`vcafe-admin-analytics`側に作成します。
+FirebaseプロジェクトはGoogle Cloudプロジェクトでもあるため、管理用Firestore、Firebase Authentication、Firebase Hosting、BigQuery、Cloud Runは`vcafe-admin-analytics`側に作成します。Next.jsの実行環境は東京リージョン（`asia-northeast1`）のCloud Runです。
 
 ## 安全境界
 
