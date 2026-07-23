@@ -9,5 +9,5 @@ serviceAccountKey*.json
 .git
 .gitignore
 docs
-services
+# Keep service sources available to their dedicated Dockerfiles.
 tests

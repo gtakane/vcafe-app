@@ -10,6 +10,10 @@ const disabledEnvironment = readFileSync(
   new URL("../disabled.env.yaml", import.meta.url),
   "utf8",
 );
+const dockerIgnore = readFileSync(
+  new URL("../../../.dockerignore", import.meta.url),
+  "utf8",
+);
 
 test("disabled job is pinned to the analytics project and Tokyo", () => {
   assert.match(deployScript, /PROJECT_ID="vcafe-admin-analytics"/);
@@ -30,3 +34,6 @@ test("deployment does not grant production IAM or execute the job", () => {
   assert.doesNotMatch(deployScript, /gcloud scheduler/);
 });
 
+test("analytics sync source remains in the container build context", () => {
+  assert.doesNotMatch(dockerIgnore, /^services\/?$/m);
+});
