@@ -1,0 +1,41 @@
+runConfig:
+  minInstances: 0
+  maxInstances: 3
+  concurrency: 40
+  cpu: 1
+  memoryMiB: 512
+
+env:
+  - variable: AUTH_MODE
+    value: firebase
+    availability: [BUILD, RUNTIME]
+  - variable: ANALYTICS_BACKEND
+    value: bigquery
+    availability: [RUNTIME]
+  - variable: BIGQUERY_LOCATION
+    value: asia-northeast1
+    availability: [RUNTIME]
+  - variable: BIGQUERY_PROJECT_ID
+    value: vcafe-admin-analytics
+    availability: [RUNTIME]
+  - variable: BIGQUERY_DATASET
+    value: vcafe_analytics
+    availability: [RUNTIME]
+  - variable: BIGQUERY_MAX_BYTES_BILLED
+    value: "1073741824"
+    availability: [RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    value: vcafe-admin-analytics
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    value: vcafe-admin-analytics.firebaseapp.com
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: AIzaSyBK7yv9NI2LTO_MOBP8_DRnk-l1KSkmOTk
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+    value: 1:996418767687:web:721cc3e1a0af3cf9cd1a62
+    availability: [BUILD, RUNTIME]
+  - variable: SESSION_COOKIE_NAME
+    value: vcafe_session
+    availability: [RUNTIME]
