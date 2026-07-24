@@ -41,13 +41,11 @@ DRY_RUN=true
 
 `visits_raw` には滞在時間の重み `weight`（core.py の `visitWeight` と一致）を保持し、日次集計は営業日（0:00〜1:59を前日扱い）で行います。
 
-## 本番Firestoreのインデックス
+## 本番Firestoreのインデックス（多くの場合は不要）
 
-collectionGroup範囲クエリのため、本番プロジェクトに COLLECTION_GROUP スコープの単一フィールドインデックスが必要です。定義は `firestore.indexes.json` にあります（未作成だと同期は `FAILED_PRECONDITION` で失敗）。
+collectionGroup範囲クエリのため COLLECTION_GROUP スコープの単一フィールドインデックスが必要ですが、既存 Streamlit が本番で同じクエリを実行できていれば既に存在します。不足時のみ dry-run が `FAILED_PRECONDITION` を返し、**エラー内のURLから必要なインデックスだけを追加作成**できます（定義は `firestore.indexes.json`）。
 
-```bash
-firebase deploy --only firestore:indexes --project v-athome-cafe-app --config services/analytics-sync/firestore.indexes.json
-```
+> ⚠️ 部分的なインデックス定義を `firebase deploy --only firestore:indexes` で流すと本番アプリの既存インデックス削除を促される場合があるため、エラーリンク経由の追加を推奨します。
 
 ## 有効化手順
 

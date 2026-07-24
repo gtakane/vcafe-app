@@ -24,18 +24,18 @@
 
 テーブルと `*_current` ビューを `vcafe_analytics` に作成する。安全（分析用プロジェクトにのみ書き込み）。
 
-## 2. 本番Firestoreの collection group インデックス作成（本番プロジェクト）
+## 2. 本番Firestoreの collection group インデックス（多くの場合は不要）
 
 同期は `userRecordVisits.enterDateTime` / `userAlbum.date` / `workshifts.openTime` に対する
-collectionGroup 範囲クエリを行うため、COLLECTION_GROUP スコープのインデックスが必要。
+collectionGroup 範囲クエリを行う。**既存の Streamlit(`core.py`) が本番で同じクエリを実行できているなら、
+必要なインデックスは既に存在する**ため、通常この手順は不要。
 
-```bash
-firebase deploy --only firestore:indexes \
-  --project v-athome-cafe-app \
-  --config services/analytics-sync/firestore.indexes.json
-```
+不足している場合のみ、後述の dry-run（手順5）が `FAILED_PRECONDITION` エラーを返し、
+**そのメッセージに含まれるURLをクリックすれば必要なインデックスだけが作成される**（追加のみ・安全）。
+必要なインデックス定義は `services/analytics-sync/firestore.indexes.json` に記載。
 
-本番プロジェクトのオーナー権限が必要。**データは変更されない**（インデックス定義のみ）。未作成だと同期は `FAILED_PRECONDITION` で失敗する。
+> ⚠️ `firebase deploy --only firestore:indexes` に**部分的な**インデックス定義を渡すと、
+> 本番アプリの既存インデックスの削除を促される場合がある。エラーリンク経由での追加作成を推奨。
 
 ## 3. HMAC シークレット作成（分析用プロジェクト）
 
