@@ -1,0 +1,63 @@
+name: vcafe-dashboard-ci
+
+on:
+  pull_request:
+    paths:
+      - "vcafe-dashboard/**"
+      - ".github/workflows/vcafe-dashboard-ci.yml"
+  push:
+    branches:
+      - "agent/nextjs-firebase-dashboard"
+    paths:
+      - "vcafe-dashboard/**"
+      - ".github/workflows/vcafe-dashboard-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vcafe-dashboard-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: vcafe-dashboard
+    env:
+      AUTH_MODE: demo
+      ANALYTICS_BACKEND: demo
+      DEMO_ROLE: admin
+      DEMO_MAID_ID: maid-01
+      NEXT_PUBLIC_FIREBASE_API_KEY: ci-placeholder
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: vcafe-admin-analytics.firebaseapp.com
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: vcafe-admin-analytics
+      NEXT_PUBLIC_FIREBASE_APP_ID: ci-placeholder
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: vcafe-dashboard/package-lock.json
+
+      - name: Install dashboard dependencies
+        run: npm ci
+
+      - name: Test dashboard
+        run: npm test
+
+      - name: Test analytics sync safety
+        run: npm test --prefix services/analytics-sync
+
+      - name: Test Discord attendance parser
+        run: npm test --prefix services/discord-attendance
+
+      - name: Build Next.js dashboard
+        run: npm run build

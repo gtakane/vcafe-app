@@ -1,0 +1,13 @@
+.next
+node_modules
+npm-debug.log
+.env
+.env.*
+!.env.example
+.firebase
+serviceAccountKey*.json
+.git
+.gitignore
+docs
+# Keep service sources available to their dedicated Dockerfiles.
+tests
