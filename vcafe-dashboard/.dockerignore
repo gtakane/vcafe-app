@@ -4,6 +4,8 @@ npm-debug.log
 .env
 .env.*
 !.env.example
+# ビルド時にNEXT_PUBLIC_*（公開のFirebase Web設定）を埋め込むため許可する。
+!.env.production
 .firebase
 serviceAccountKey*.json
 .git
