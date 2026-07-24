@@ -115,6 +115,7 @@ export interface MaidMonthlyRow {
   totalReservation: number;
   totalWorkTimes: number;
   totalWorkTimesReserve: number;
+  presumeTotalWorkTimeReserve: number;
   totalVisits: number;
   totalOtameshi: number;
   totalPresents: number;
@@ -149,6 +150,7 @@ export function mapMonthlyReport(maidId: string, month: string, data: Record<str
     totalReservation: numberValue(data.totalReservation),
     totalWorkTimes: numberValue(data.totalWorkTimes),
     totalWorkTimesReserve: numberValue(data.totalWorkTimesReserve),
+    presumeTotalWorkTimeReserve: numberValue(data.presumeTotalWorkTimeReserve),
     totalVisits: numberValue(data.totalVisits),
     totalOtameshi: numberValue(data.totalOtameshi),
     totalPresents: numberValue(data.totalPresents),

@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.maid_monthly_raw` (
   totalReservation FLOAT64,
   totalWorkTimes FLOAT64,
   totalWorkTimesReserve FLOAT64,
+  presumeTotalWorkTimeReserve FLOAT64,
   totalVisits FLOAT64,
   totalOtameshi FLOAT64,
   totalPresents FLOAT64,

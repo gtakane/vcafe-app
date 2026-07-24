@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { buildTrend, customerRows, filterData, maidRows, summarize } from "@/lib/analytics";
-import type { AnalyticsData, AttendanceSubmission, Granularity, Viewer } from "@/lib/types";
+import type { AnalyticsData, AttendanceSubmission, Granularity, MaidMonthlyReport, MaidReportsResult, Viewer } from "@/lib/types";
 import LogoutButton from "@/components/logout-button";
 
 type View = "overview" | "maids" | "users" | "relations" | "attendance";
@@ -29,6 +29,95 @@ function LineChart({ points }: { points: Array<{ label: string; visits: number }
 
 function Metric({ label, value, note, tone = "pink" }: { label: string; value: string; note: string; tone?: string }) {
   return <article className="metric"><div className={`metric-icon ${tone}`}>●</div><div><p>{label}</p><strong>{value}</strong><small>{note}</small></div></article>;
+}
+
+type ReportRow = MaidMonthlyReport & { averageVisit: number; photoPrice: number };
+
+// 本番 maidWorkReport の月次実績17列。kind は表示形式とソートの型。
+const REPORT_COLUMNS: Array<{ key: keyof ReportRow; label: string; kind: "text" | "num" | "money" | "hours" | "float" }> = [
+  { key: "nickname", label: "メイド名", kind: "text" },
+  { key: "attendance", label: "お給仕回数", kind: "num" },
+  { key: "totalWorkTimes", label: "お給仕時間", kind: "hours" },
+  { key: "late", label: "遅刻回数", kind: "num" },
+  { key: "latetime", label: "遅刻時間", kind: "float" },
+  { key: "totalReservation", label: "予約ご帰宅回数", kind: "num" },
+  { key: "totalWorkTimesReserve", label: "お給仕時間(予約)", kind: "float" },
+  { key: "presumeTotalWorkTimeReserve", label: "見なしお給仕時間(予約)", kind: "float" },
+  { key: "lateReservation", label: "遅刻回数(予約)", kind: "num" },
+  { key: "latetimeReservation", label: "遅刻時間(予約)", kind: "float" },
+  { key: "totalVisits", label: "ご帰宅数", kind: "num" },
+  { key: "totalOtameshi", label: "お試しご帰宅回数", kind: "num" },
+  { key: "averageVisit", label: "平均ご帰宅数", kind: "float" },
+  { key: "totalPresents", label: "プレゼント数", kind: "num" },
+  { key: "totalPresentsPrice", label: "プレゼント売上", kind: "money" },
+  { key: "totalPhoto", label: "記念撮影回数", kind: "num" },
+  { key: "photoPrice", label: "記念撮影売上", kind: "money" },
+];
+
+function formatCell(value: number | string, kind: string) {
+  if (kind === "text") return String(value);
+  const n = Number(value);
+  if (kind === "money") return yen.format(n);
+  if (kind === "hours") return `${n.toFixed(1)}h`;
+  if (kind === "float") return n.toFixed(2);
+  return number.format(n);
+}
+
+function downloadReportCsv(rows: ReportRow[], month: string) {
+  const all = [REPORT_COLUMNS.map((c) => c.label), ...rows.map((r) => REPORT_COLUMNS.map((c) => r[c.key]))];
+  const safe = (value: unknown) => { const raw = String(value); const protectedValue = /^[=+\-@]/.test(raw) ? `'${raw}` : raw; return `"${protectedValue.replaceAll('"', '""')}"`; };
+  const blob = new Blob(["﻿" + all.map((row) => row.map(safe).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `maid-report_${month}.csv`; anchor.click(); URL.revokeObjectURL(url);
+}
+
+function MaidReports({ viewer }: { viewer: Viewer }) {
+  const [data, setData] = useState<MaidReportsResult | null>(null);
+  const [month, setMonth] = useState("");
+  const [sortKey, setSortKey] = useState<keyof ReportRow>("totalVisits");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true); setError("");
+    const params = new URLSearchParams();
+    if (month) params.set("month", month);
+    fetch(`/api/maid-reports?${params}`, { signal: controller.signal, cache: "no-store" })
+      .then(async (response) => { const body = await response.json(); if (!response.ok) throw new Error(body.error || "メイド実績を取得できませんでした"); setData(body); if (!month && body.month) setMonth(body.month); })
+      .catch((e) => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "メイド実績を取得できませんでした"); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [month]);
+  const rows: ReportRow[] = useMemo(() => {
+    const base = (data?.reports || []).map((r) => ({ ...r, averageVisit: r.totalWorkTimes > 0 ? r.totalVisits / r.totalWorkTimes : 0, photoPrice: r.totalPhoto * 500 }));
+    return base.sort((a, b) => {
+      const av = a[sortKey]; const bv = b[sortKey];
+      const cmp = typeof av === "string" ? String(av).localeCompare(String(bv), "ja") : Number(av) - Number(bv);
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [data, sortKey, sortDir]);
+  const toggleSort = (key: keyof ReportRow) => {
+    if (key === sortKey) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    else { setSortKey(key); setSortDir("desc"); }
+  };
+  const monthLabel = (m: string) => (m ? `${m.slice(0, 4)}年${m.slice(4, 6)}月` : "");
+  return <section className="panel table-panel">
+    <div className="panel-head">
+      <div><p className="eyebrow">MAID PERFORMANCE</p><h2>{viewer.role === "admin" ? "メイド実績" : "あなたの実績"}</h2><small>本番 maidWorkReport の月次実績</small></div>
+      <div style={{ display: "flex", gap: ".6rem", alignItems: "center" }}>
+        <label>月 <select value={month} onChange={(e) => setMonth(e.target.value)}>{(data?.months || []).map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select></label>
+        <button className="secondary" onClick={() => downloadReportCsv(rows, month)} disabled={!rows.length}>CSV出力</button>
+      </div>
+    </div>
+    {error ? <p className="error">{error}</p> : loading && !data ? <p className="muted">読込中…</p> : rows.length === 0 ? <p className="muted">この月のデータがありません</p> :
+    <div className="table-scroll"><table><thead><tr>{REPORT_COLUMNS.map((c) => (
+      <th key={String(c.key)} onClick={() => toggleSort(c.key)} title="クリックで並び替え" style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap", textAlign: c.kind === "text" ? "left" : "right", color: sortKey === c.key ? "#ef5da8" : undefined }}>{c.label}{sortKey === c.key ? (sortDir === "desc" ? " ▼" : " ▲") : ""}</th>
+    ))}</tr></thead><tbody>{rows.map((r) => (
+      <tr key={r.maidId}>{REPORT_COLUMNS.map((c) => (
+        <td key={String(c.key)} style={{ whiteSpace: "nowrap", textAlign: c.kind === "text" ? "left" : "right" }}>{c.kind === "text" ? <b>{formatCell(r[c.key] as number | string, c.kind)}</b> : formatCell(r[c.key] as number | string, c.kind)}</td>
+      ))}</tr>
+    ))}</tbody></table></div>}
+  </section>;
 }
 
 export default function Dashboard({ initialData, initialStart, initialEnd, viewer }: { initialData: AnalyticsData; initialStart: string; initialEnd: string; viewer: Viewer }) {
@@ -112,7 +201,7 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
         <section className="grid-2"><article className="panel"><div className="panel-head"><div><p className="eyebrow">CUSTOMER MIX</p><h2>ユーザーランク構成</h2></div></div><div className="rank-mix">{visibleRanks.map((rank)=>{const count=customerStats.filter((u)=>u.rank===rank).length;return <div key={rank}><span>{rank}</span><strong>{count}<small>名</small></strong><i><em style={{width:`${customerStats.length?count/customerStats.length*100:0}%`}}/></i></div>})}</div></article><article className="panel"><div className="panel-head"><div><p className="eyebrow">TOP CUSTOMERS</p><h2>{viewer.role === "admin" ? "ご帰宅ユーザー" : "お客様傾向"}</h2></div></div>{viewer.role === "admin" ? <div className="compact-users">{customerStats.slice(0,4).map((u)=><div key={u.id}><span className={`rank-pill ${u.rank}`}>{u.rank.slice(0,1)}</span><div><strong>{u.name}</strong><small>最終 {u.lastVisit}</small></div><b>{u.visits}回</b></div>)}</div> : <p className="privacy-note">メイド画面では個別ユーザー名を表示せず、ランク構成・リピート率など本人に関係する集計のみ表示します。</p>}</article></section>
       </>}
 
-      {view === "maids" && <section className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">MAID PERFORMANCE</p><h2>{viewer.role === "admin" ? "メイド実績一覧" : "あなたの実績"}</h2></div><button className="secondary" onClick={()=>downloadCsv(`maid-performance_${start}_${end}.csv`, [["メイド","ご帰宅","ユーザー","リピート率","実働時間","1時間あたり","売上"],...maidStats.map((m)=>[m.name,m.visits,m.users,(m.repeatRate*100).toFixed(1),m.workHours.toFixed(1),m.perHour.toFixed(2),m.revenue])])}>CSV出力</button></div><div className="table-scroll"><table><thead><tr><th>メイド</th><th>ご帰宅</th><th>ユーザー</th><th>リピート率</th><th>実働時間</th><th>1時間あたり</th><th>売上</th></tr></thead><tbody>{maidStats.map((m)=><tr key={m.id}><td><span className="table-person"><span className="mini-avatar">{m.avatar}</span><b>{m.name}</b></span></td><td>{m.visits}件</td><td>{m.users}名</td><td>{(m.repeatRate*100).toFixed(1)}%</td><td>{m.workHours.toFixed(1)}h</td><td>{m.perHour.toFixed(2)}件</td><td>{yen.format(m.revenue)}</td></tr>)}</tbody></table></div></section>}
+      {view === "maids" && <MaidReports viewer={viewer} />}
 
       {view === "users" && viewer.role === "admin" && <section className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">CUSTOMER DATABASE</p><h2>ユーザーデータベース</h2></div><input className="search" value={userQuery} onChange={(e)=>setUserQuery(e.target.value)} placeholder="⌕ ユーザーを検索" /></div><div className="table-scroll"><table><thead><tr><th>ユーザー名</th><th>ランク</th><th>登録日</th><th>ご帰宅</th><th>利用額</th><th>最推しメイド</th><th>最終ご帰宅</th></tr></thead><tbody>{visibleCustomers.map((u)=><tr key={u.id}><td><b>{u.name}</b><small className="id">{u.id}</small></td><td><span className={`text-rank ${u.rank}`}>{u.rank}</span></td><td>{jstDate(u.registeredAt)}</td><td>{u.visits}回</td><td>{yen.format(u.spend)}</td><td>{u.favoriteMaid}</td><td>{u.lastVisit}</td></tr>)}</tbody></table></div></section>}
 

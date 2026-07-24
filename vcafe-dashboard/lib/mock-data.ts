@@ -1,4 +1,4 @@
-import type { AnalyticsData, Customer, Maid, Shift, Visit } from "./types";
+import type { AnalyticsData, Customer, Maid, MaidReportsResult, Shift, Visit } from "./types";
 import { visitWeight } from "./metrics.ts";
 
 export const maids: Maid[] = [
@@ -73,3 +73,34 @@ export const mockAnalyticsData: AnalyticsData = {
   visits,
   shifts,
 };
+
+// デモ用の月次メイド実績（架空値）。
+export function mockMaidReports(requestedMonth?: string, maidId?: string): MaidReportsResult {
+  const months = ["202607", "202606"];
+  const month = requestedMonth && months.includes(requestedMonth) ? requestedMonth : months[0];
+  const seasonal = month === "202606" ? 6 : 0;
+  const reports = maids.map((maid, index) => {
+    const hasReserve = index % 2 === 0;
+    return {
+      maidId: maid.id,
+      month,
+      nickname: maid.name,
+      attendance: 8 + index,
+      totalWorkTimes: 20 + index * 3,
+      late: index % 3 === 0 ? 1 : 0,
+      latetime: index % 3 === 0 ? 0.05 : 0,
+      totalReservation: hasReserve ? 1.5 * (index + 1) : 0,
+      totalWorkTimesReserve: hasReserve ? 0.517 * (index + 1) : 0,
+      presumeTotalWorkTimeReserve: hasReserve ? 0.667 * (index + 1) : 0,
+      lateReservation: 0,
+      latetimeReservation: 0,
+      totalVisits: 100 - index * 12 + seasonal,
+      totalOtameshi: index % 4 === 0 ? 1 : 0,
+      totalPresents: index * 3,
+      totalPresentsPrice: index * 3 * 200,
+      totalPhoto: 30 - index * 3,
+    };
+  });
+  const filtered = maidId ? reports.filter((report) => report.maidId === maidId) : reports;
+  return { months, month, reports: filtered };
+}
