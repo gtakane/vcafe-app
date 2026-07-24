@@ -3,6 +3,7 @@ import { Client, GatewayIntentBits } from "discord.js";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { parseShiftTemplate } from "./parser.ts";
+import { resolveManagementProjectId } from "./safety.ts";
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -10,11 +11,8 @@ const required = (name: string) => {
   return value;
 };
 
-const managementProjectId = required("MANAGEMENT_PROJECT_ID");
-const productionProjectId = process.env.PRODUCTION_PROJECT_ID;
-if (productionProjectId && managementProjectId === productionProjectId) {
-  throw new Error("安全のため、管理用プロジェクトと本番プロジェクトを同一にはできません");
-}
+// 本番プロジェクトへの書き込みを多層で防ぐ（詳細は safety.ts）。
+const managementProjectId = resolveManagementProjectId(process.env);
 
 const app = initializeApp({ credential: applicationDefault(), projectId: managementProjectId });
 const db = getFirestore(app);
