@@ -41,9 +41,16 @@ async function readUsers(ids: string[]) {
   return documents;
 }
 
+// ストリーミング挿入の重複排除キー。id が無い行（月次レポート等）は maidId:month で一意化する。
+// 全行が同一 insertId になると BigQuery が1件を残して残りを重複破棄してしまうため。
+function rowInsertId(row: Record<string, unknown>): string {
+  const identity = row.id ?? (row.maidId != null && row.month != null ? `${row.maidId}:${row.month}` : "row");
+  return `${String(identity)}:${String(row.sourceUpdatedAt || syncedAt)}`;
+}
+
 async function insertRows(tableName: string, rows: Array<Record<string, unknown>>) {
   if (!rows.length || config.dryRun) return;
-  const rawRows = rows.map((row) => ({ insertId: `${String(row.id)}:${String(row.sourceUpdatedAt || syncedAt)}`, json: row }));
+  const rawRows = rows.map((row) => ({ insertId: rowInsertId(row), json: row }));
   try {
     await bigquery.dataset(config.dataset).table(tableName).insert(rawRows, { raw: true, ignoreUnknownValues: false });
   } catch (error) {
