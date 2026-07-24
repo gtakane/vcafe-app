@@ -100,30 +100,41 @@ function bucketKey(at: string, granularity: Granularity) {
 }
 
 export function buildTrend(visits: Visit[], granularity: Granularity) {
-  const map = new Map<string, { label: string; visits: number; revenue: number }>();
+  const map = new Map<string, { label: string; visits: number; revenue: number; sortAt: number }>();
   visits.forEach((visit) => {
     const label = bucketKey(visit.at, granularity);
-    const current = map.get(label) || { label, visits: 0, revenue: 0 };
+    const at = new Date(visit.at).getTime();
+    const current = map.get(label) || { label, visits: 0, revenue: 0, sortAt: at };
     current.visits += visit.weight ?? 1;
     current.revenue += visit.revenue + visit.cheki * CHEKI_PRICE;
+    current.sortAt = Math.min(current.sortAt, at);
     map.set(label, current);
   });
-  return [...map.values()];
+  // 時系列順（古い→新しい＝左→右）に並べる。
+  return [...map.values()].sort((a, b) => a.sortAt - b.sortAt);
 }
 
 export function maidRows(data: AnalyticsData) {
-  return data.maids.map((maid) => {
+  const rows = data.maids.map((maid) => {
     const visits = data.visits.filter((v) => v.maidId === maid.id);
     const shifts = data.shifts.filter((s) => s.maidId === maid.id);
     const users = new Set(visits.map((v) => v.customerId)).size;
     const revenue = visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0);
+    const cheki = visits.reduce((sum, v) => sum + v.cheki, 0);
     const workHours = shifts.reduce((sum, s) => sum + shiftActualHours(s), 0);
     // 平均ご帰宅数(件/h)は予約を除いた重み付き件数 / 稼働時間（core.py: non_rsv_weight / 稼働時間数）。
     const nonReservationWeight = visits.reduce((sum, v) => sum + (v.type === "reservation" ? 0 : v.weight ?? 1), 0);
     const weightedVisits = weightedVisitCount(visits);
     const repeatUsers = [...new Set(visits.map((v) => v.customerId))].filter((id) => visits.filter((v) => v.customerId === id).length >= 2).length;
-    return { ...maid, visits: weightedVisits, users, revenue, workHours, perHour: workHours ? nonReservationWeight / workHours : 0, repeatRate: users ? repeatUsers / users : 0 };
-  }).sort((a, b) => b.visits - a.visits);
+    return { ...maid, visits: weightedVisits, users, cheki, revenue, workHours, perHour: workHours ? nonReservationWeight / workHours : 0, repeatRate: users ? repeatUsers / users : 0 };
+  });
+  // 人気度スコア: ご帰宅数・平均ご帰宅数(件/h)・チェキ数 を各最大値で正規化して平均（0〜1）。
+  // 単純なご帰宅数だけでなく、時間あたり効率とチェキ実績も加味する。
+  const maxOf = (key: "visits" | "perHour" | "cheki") => Math.max(...rows.map((r) => r[key]), 1);
+  const maxVisits = maxOf("visits"), maxPerHour = maxOf("perHour"), maxCheki = maxOf("cheki");
+  return rows
+    .map((r) => ({ ...r, score: (r.visits / maxVisits + r.perHour / maxPerHour + r.cheki / maxCheki) / 3 }))
+    .sort((a, b) => b.score - a.score);
 }
 
 export function customerRows(data: AnalyticsData) {
