@@ -17,10 +17,10 @@ const sourceDb = getFirestore(sourceApp);
 const bigquery = new BigQuery({ projectId: config.analyticsProjectId });
 const syncedAt = new Date().toISOString();
 
-async function readGroup(group: string, dateField: string) {
+async function readGroup(group: string, dateField: string, start: Date, end: Date) {
   const snapshots = await sourceDb.collectionGroup(group)
-    .where(dateField, ">=", Timestamp.fromDate(config.start))
-    .where(dateField, "<", Timestamp.fromDate(config.end))
+    .where(dateField, ">=", Timestamp.fromDate(start))
+    .where(dateField, "<", Timestamp.fromDate(end))
     .limit(config.maxDocuments)
     .get();
   return snapshots.docs.map((document): SourceDocument => ({
@@ -54,25 +54,44 @@ async function insertRows(tableName: string, rows: Array<Record<string, unknown>
   }
 }
 
-const [visitDocuments, chekiDocuments, shiftDocuments] = await Promise.all([
-  readGroup("userRecordVisits", "enterDateTime"),
-  readGroup("userAlbum", "date"),
-  readGroup("workshifts", "openTime"),
-]);
-const userIds = [...new Set([...visitDocuments, ...chekiDocuments].map((document) => document.parentId).filter((id): id is string => Boolean(id)))];
-const userDocuments = await readUsers(userIds);
-const excludedUsers = new Set(userDocuments.filter((document) => !mapUser(document, config.hmacSecret)).map((document) => document.id));
-const maidMap = buildMaidMap(shiftDocuments);
-const customers = userDocuments.map((document) => mapUser(document, config.hmacSecret)).filter((row): row is NonNullable<typeof row> => Boolean(row));
-const visits = visitDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapVisit(document, config.hmacSecret, maidMap)).filter((row): row is NonNullable<typeof row> => Boolean(row));
-const cheki = chekiDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapCheki(document, config.hmacSecret, maidMap, syncedAt)).filter((row): row is NonNullable<typeof row> => Boolean(row));
-const shifts = shiftDocuments.map(mapShift).filter((row): row is NonNullable<typeof row> => Boolean(row));
+// 指定した [start, end) の24時間窓を1回分同期する。
+async function syncWindow(start: Date, end: Date) {
+  const [visitDocuments, chekiDocuments, shiftDocuments] = await Promise.all([
+    readGroup("userRecordVisits", "enterDateTime", start, end),
+    readGroup("userAlbum", "date", start, end),
+    readGroup("workshifts", "openTime", start, end),
+  ]);
+  const userIds = [...new Set([...visitDocuments, ...chekiDocuments].map((document) => document.parentId).filter((id): id is string => Boolean(id)))];
+  const userDocuments = await readUsers(userIds);
+  const excludedUsers = new Set(userDocuments.filter((document) => !mapUser(document, config.hmacSecret)).map((document) => document.id));
+  const maidMap = buildMaidMap(shiftDocuments);
+  const customers = userDocuments.map((document) => mapUser(document, config.hmacSecret)).filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const visits = visitDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapVisit(document, config.hmacSecret, maidMap)).filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const cheki = chekiDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapCheki(document, config.hmacSecret, maidMap, syncedAt)).filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const shifts = shiftDocuments.map(mapShift).filter((row): row is NonNullable<typeof row> => Boolean(row));
 
-await Promise.all([
-  insertRows("customers_raw", customers.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: null }))),
-  insertRows("visits_raw", visits.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: visitDocuments.find((document) => document.id === row.id)?.updatedAt || null }))),
-  insertRows("cheki_raw", cheki),
-  insertRows("shifts_raw", shifts.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: shiftDocuments.find((document) => document.id === row.id)?.updatedAt || null }))),
-]);
+  await Promise.all([
+    insertRows("customers_raw", customers.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: null }))),
+    insertRows("visits_raw", visits.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: visitDocuments.find((document) => document.id === row.id)?.updatedAt || null }))),
+    insertRows("cheki_raw", cheki),
+    insertRows("shifts_raw", shifts.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: shiftDocuments.find((document) => document.id === row.id)?.updatedAt || null }))),
+  ]);
 
-console.info(JSON.stringify({ dryRun: config.dryRun, range: { start: config.start.toISOString(), end: config.end.toISOString() }, counts: { customers: customers.length, visits: visits.length, cheki: cheki.length, shifts: shifts.length } }));
+  console.info(JSON.stringify({ dryRun: config.dryRun, window: { start: start.toISOString(), end: end.toISOString() }, counts: { customers: customers.length, visits: visits.length, cheki: cheki.length, shifts: shifts.length } }));
+}
+
+// BACKFILL_DAYS が指定されていれば過去N日を24時間窓で古い順に取り込む。無ければ通常の単一窓。
+const DAY_MS = 24 * 60 * 60 * 1000;
+const backfillDays = Number(process.env.BACKFILL_DAYS || 0);
+if (Number.isInteger(backfillDays) && backfillDays > 0) {
+  if (backfillDays > 400) throw new Error("BACKFILL_DAYSは400以下にしてください");
+  const now = Date.now();
+  for (let day = backfillDays; day >= 1; day -= 1) {
+    const windowStart = new Date(now - day * DAY_MS);
+    const windowEnd = new Date(now - (day - 1) * DAY_MS);
+    console.info(`BACKFILL day -${day}: ${windowStart.toISOString()} .. ${windowEnd.toISOString()}`);
+    await syncWindow(windowStart, windowEnd);
+  }
+} else {
+  await syncWindow(config.start, config.end);
+}
