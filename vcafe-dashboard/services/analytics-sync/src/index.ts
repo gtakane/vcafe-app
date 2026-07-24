@@ -4,6 +4,13 @@ import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { loadSyncConfig } from "./config.ts";
 import { buildMaidMap, mapCheki, mapShift, mapUser, mapVisit, type SourceDocument } from "./transform.ts";
 
+// 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
+process.on("unhandledRejection", (error) => {
+  const err = error as { name?: string; message?: string; errors?: unknown[]; response?: { insertErrors?: unknown[] } };
+  console.error(`UNHANDLED_REJECTION name=${err?.name} message=${err?.message} detail=${JSON.stringify((err?.errors ?? err?.response?.insertErrors ?? []).slice(0, 5))}`);
+  process.exit(1);
+});
+
 const config = loadSyncConfig(process.env);
 const sourceApp = initializeApp({ credential: applicationDefault(), projectId: config.productionProjectId }, "production-readonly");
 const sourceDb = getFirestore(sourceApp);
@@ -37,7 +44,14 @@ async function readUsers(ids: string[]) {
 async function insertRows(tableName: string, rows: Array<Record<string, unknown>>) {
   if (!rows.length || config.dryRun) return;
   const rawRows = rows.map((row) => ({ insertId: `${String(row.id)}:${String(row.sourceUpdatedAt || syncedAt)}`, json: row }));
-  await bigquery.dataset(config.dataset).table(tableName).insert(rawRows, { raw: true, ignoreUnknownValues: false });
+  try {
+    await bigquery.dataset(config.dataset).table(tableName).insert(rawRows, { raw: true, ignoreUnknownValues: false });
+  } catch (error) {
+    const err = error as { name?: string; message?: string; errors?: unknown[]; response?: { insertErrors?: unknown[] } };
+    const reasons = (err.errors ?? err.response?.insertErrors ?? []).slice(0, 3);
+    console.error(`INSERT_FAILED table=${tableName} name=${err.name} message=${err.message} reasons=${JSON.stringify(reasons)}`);
+    throw error;
+  }
 }
 
 const [visitDocuments, chekiDocuments, shiftDocuments] = await Promise.all([
