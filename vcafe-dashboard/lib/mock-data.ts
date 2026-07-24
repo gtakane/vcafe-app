@@ -1,4 +1,5 @@
 import type { AnalyticsData, Customer, Maid, Shift, Visit } from "./types";
+import { visitWeight } from "./metrics.ts";
 
 export const maids: Maid[] = [
   { id: "maid-01", name: "こはる", avatar: "こ", status: "active" },
@@ -31,7 +32,10 @@ for (let day = 1; day <= 21; day += 1) {
     const maidIndex = (day + i * 2) % maids.length;
     const customerIndex = (day * 3 + i) % customers.length;
     const kind = (day + i) % 9;
-    const type: Visit["type"] = kind === 0 ? "trial" : kind === 1 ? "reservation" : kind === 2 ? "free" : "paid";
+    // classifyVisit と同じ種別体系（無料=trial のみ、他は予約/有料）。
+    const type: Visit["type"] = kind === 0 ? "trial" : kind === 1 ? "reservation" : "paid";
+    // initialTime を擬似的に変化させ、滞在40分相当(=重み2)を混在させる。
+    const initialTime = i % 4 === 0 ? 40 : 20;
     visits.push({
       id: `visit-${visitId++}`,
       at: iso(day, 19 + (i % 6), (i * 11) % 60),
@@ -40,6 +44,7 @@ for (let day = 1; day <= 21; day += 1) {
       type,
       revenue: type === "reservation" ? 3920 : type === "paid" ? 840 + (i % 3) * 120 : 0,
       cheki: (day + i) % 4 === 0 ? 1 : 0,
+      weight: visitWeight(initialTime),
     });
   }
 }
@@ -54,9 +59,9 @@ for (let day = 1; day <= 21; day += 1) {
       id: `shift-${shiftId++}`,
       maidId: maid.id,
       scheduledStart: iso(day, 19),
-      scheduledEnd: iso(day + (day === 31 ? -30 : 0), 23, 30),
+      scheduledEnd: iso(day, 23, 30),
       actualStart: iso(day, 19, late),
-      actualEnd: iso(day + (day === 31 ? -30 : 0), 23, 30),
+      actualEnd: iso(day, 23, 30),
     });
   });
 }

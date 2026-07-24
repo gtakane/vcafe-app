@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.visits_raw` (
   type STRING NOT NULL,
   revenue INT64 NOT NULL,
   cheki INT64 NOT NULL,
+  -- 滞在時間による重み（core.py: max(1, round(initialTime/20))）。ご帰宅数の重み付き集計に使用。
+  weight INT64 NOT NULL,
   syncedAt TIMESTAMP NOT NULL,
   sourceUpdatedAt TIMESTAMP
 )
@@ -88,13 +90,14 @@ WITH latest_visits AS (
   )
   WHERE row_number = 1
 ), cheki_daily AS (
-  SELECT customerId, maidId, DATE(`at`, "Asia/Tokyo") AS business_date, COUNT(*) AS cheki_count
+  -- 営業日（0:00〜1:59を前日扱い）でチェキ枚数を日次集計（core.py _biz_date と一致）。
+  SELECT customerId, maidId, DATE(TIMESTAMP_SUB(`at`, INTERVAL 2 HOUR), "Asia/Tokyo") AS business_date, COUNT(*) AS cheki_count
   FROM latest_cheki GROUP BY customerId, maidId, business_date
 ), numbered_visits AS (
-  SELECT v.*, ROW_NUMBER() OVER (PARTITION BY customerId, maidId, DATE(`at`, "Asia/Tokyo") ORDER BY `at`) AS daily_row
+  SELECT v.*, ROW_NUMBER() OVER (PARTITION BY customerId, maidId, DATE(TIMESTAMP_SUB(`at`, INTERVAL 2 HOUR), "Asia/Tokyo") ORDER BY `at`) AS daily_row
   FROM latest_visits v
 )
 SELECT v.* EXCEPT(cheki, daily_row), IF(v.daily_row = 1, COALESCE(c.cheki_count, 0), 0) AS cheki
 FROM numbered_visits v
 LEFT JOIN cheki_daily c
-  ON c.customerId = v.customerId AND c.maidId = v.maidId AND c.business_date = DATE(v.`at`, "Asia/Tokyo");
+  ON c.customerId = v.customerId AND c.maidId = v.maidId AND c.business_date = DATE(TIMESTAMP_SUB(v.`at`, INTERVAL 2 HOUR), "Asia/Tokyo");

@@ -1,4 +1,12 @@
-import type { AnalyticsData, Granularity, Role, Viewer, Visit } from "./types";
+import type { AnalyticsData, Granularity, Viewer, Visit } from "./types";
+import {
+  businessDateJst,
+  CHEKI_PRICE,
+  shiftActualHours,
+  shiftLateMinutes,
+  weightedPaidCount,
+  weightedVisitCount,
+} from "./metrics.ts";
 
 export interface AnalyticsFilter {
   start: string;
@@ -62,36 +70,33 @@ export function filterData(data: AnalyticsData, viewer: Viewer, filter: Analytic
 }
 
 export function summarize(data: AnalyticsData) {
-  const revenue = data.visits.reduce((sum, v) => sum + v.revenue + v.cheki * 500, 0);
+  // 売上・ご帰宅数はcore.pyと一致させる（チェキ単価は定数、ご帰宅数・有料数は重み付き）。
+  const revenue = data.visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0);
   const customerCount = new Set(data.visits.map((v) => v.customerId)).size;
-  const paid = data.visits.filter((v) => v.type === "paid" || v.type === "reservation").length;
+  const paid = weightedPaidCount(data.visits);
   const cheki = data.visits.reduce((sum, v) => sum + v.cheki, 0);
-  const workMinutes = data.shifts.reduce((sum, s) => {
-    if (!s.actualStart || !s.actualEnd) return sum;
-    return sum + Math.max(0, new Date(s.actualEnd).getTime() - new Date(s.actualStart).getTime()) / 60000;
-  }, 0);
-  const lateMinutes = data.shifts.reduce((sum, s) => {
-    if (!s.actualStart) return sum;
-    return sum + Math.max(0, new Date(s.actualStart).getTime() - new Date(s.scheduledStart).getTime()) / 60000;
-  }, 0);
-  return { visits: data.visits.length, revenue, customerCount, paid, cheki, workHours: workMinutes / 60, lateMinutes };
+  const workMinutes = data.shifts.reduce((sum, s) => sum + shiftActualHours(s) * 60, 0);
+  const lateMinutes = data.shifts.reduce((sum, s) => sum + shiftLateMinutes(s), 0);
+  return { visits: weightedVisitCount(data.visits), revenue, customerCount, paid, cheki, workHours: workMinutes / 60, lateMinutes };
 }
 
 function bucketKey(at: string, granularity: Granularity) {
-  const date = new Date(at);
-  const local = new Date(date.getTime() + 9 * 3600000);
-  const y = local.getUTCFullYear();
-  const m = String(local.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(local.getUTCDate()).padStart(2, "0");
-  if (granularity === "hour") return `${m}/${d} ${String(local.getUTCHours()).padStart(2, "0")}:00`;
-  if (granularity === "month") return `${y}/${m}`;
+  // 日次/週次/月次は営業日（0:00〜1:59を前日扱い）を基準にする（core.py _biz_date と一致）。
+  // 時間別だけは実時刻をそのまま用いる。
+  const businessDate = businessDateJst(at); // 'YYYY-MM-DD'（JST営業日）
+  const [y, mm, dd] = businessDate.split("-");
+  if (granularity === "hour") {
+    const local = new Date(new Date(at).getTime() + 9 * 3600000);
+    return `${String(local.getUTCMonth() + 1).padStart(2, "0")}/${String(local.getUTCDate()).padStart(2, "0")} ${String(local.getUTCHours()).padStart(2, "0")}:00`;
+  }
+  if (granularity === "month") return `${y}/${mm}`;
   if (granularity === "week") {
-    const monday = new Date(Date.UTC(y, local.getUTCMonth(), local.getUTCDate()));
+    const monday = new Date(Date.UTC(Number(y), Number(mm) - 1, Number(dd)));
     const offset = (monday.getUTCDay() + 6) % 7;
     monday.setUTCDate(monday.getUTCDate() - offset);
     return `${String(monday.getUTCMonth() + 1).padStart(2, "0")}/${String(monday.getUTCDate()).padStart(2, "0")}週`;
   }
-  return `${m}/${d}`;
+  return `${mm}/${dd}`;
 }
 
 export function buildTrend(visits: Visit[], granularity: Granularity) {
@@ -99,8 +104,8 @@ export function buildTrend(visits: Visit[], granularity: Granularity) {
   visits.forEach((visit) => {
     const label = bucketKey(visit.at, granularity);
     const current = map.get(label) || { label, visits: 0, revenue: 0 };
-    current.visits += 1;
-    current.revenue += visit.revenue + visit.cheki * 500;
+    current.visits += visit.weight ?? 1;
+    current.revenue += visit.revenue + visit.cheki * CHEKI_PRICE;
     map.set(label, current);
   });
   return [...map.values()];
@@ -111,10 +116,13 @@ export function maidRows(data: AnalyticsData) {
     const visits = data.visits.filter((v) => v.maidId === maid.id);
     const shifts = data.shifts.filter((s) => s.maidId === maid.id);
     const users = new Set(visits.map((v) => v.customerId)).size;
-    const revenue = visits.reduce((sum, v) => sum + v.revenue + v.cheki * 500, 0);
-    const workHours = shifts.reduce((sum, s) => !s.actualStart || !s.actualEnd ? sum : sum + (new Date(s.actualEnd).getTime() - new Date(s.actualStart).getTime()) / 3600000, 0);
+    const revenue = visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0);
+    const workHours = shifts.reduce((sum, s) => sum + shiftActualHours(s), 0);
+    // 平均ご帰宅数(件/h)は予約を除いた重み付き件数 / 稼働時間（core.py: non_rsv_weight / 稼働時間数）。
+    const nonReservationWeight = visits.reduce((sum, v) => sum + (v.type === "reservation" ? 0 : v.weight ?? 1), 0);
+    const weightedVisits = weightedVisitCount(visits);
     const repeatUsers = [...new Set(visits.map((v) => v.customerId))].filter((id) => visits.filter((v) => v.customerId === id).length >= 2).length;
-    return { ...maid, visits: visits.length, users, revenue, workHours, perHour: workHours ? visits.length / workHours : 0, repeatRate: users ? repeatUsers / users : 0 };
+    return { ...maid, visits: weightedVisits, users, revenue, workHours, perHour: workHours ? nonReservationWeight / workHours : 0, repeatRate: users ? repeatUsers / users : 0 };
   }).sort((a, b) => b.visits - a.visits);
 }
 
@@ -125,7 +133,7 @@ export function customerRows(data: AnalyticsData) {
     return {
       ...customer,
       visits: visits.length,
-      spend: visits.reduce((sum, v) => sum + v.revenue + v.cheki * 500, 0),
+      spend: visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0),
       favoriteMaid: favorite?.count ? favorite.name : "—",
       lastVisit: visits[0]?.at.slice(0, 10) || "—",
     };

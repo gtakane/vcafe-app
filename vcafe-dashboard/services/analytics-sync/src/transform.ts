@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { firestoreTimestampToIso, mapFirestoreUser } from "../../../lib/user-mapping.ts";
+import { classifyVisit, visitRevenue, visitWeight } from "../../../lib/metrics.ts";
 import type { Customer, Shift, Visit } from "../../../lib/types.ts";
 
 export interface SourceDocument {
@@ -50,11 +51,11 @@ export function mapVisit(document: SourceDocument, secret: string, maidIdsByNick
   const roomType = String(document.data.roomType || "");
   const billedCoin = numberValue(document.data.billedCoin);
   const billedReward = numberValue(document.data.billedRewardPoint);
-  const isTrial = ticketId === "trial10minutes";
-  const prices: Record<string, number> = { gokitaku30minutes: 840, premiumGokitaku1: 960, luckyGokitaku: 650 };
-  const type: Visit["type"] = isTrial ? "trial" : roomType === "reservation" ? "reservation" : billedCoin + billedReward <= 0 ? "free" : "paid";
-  const revenue = isTrial || type === "free" ? 0 : type === "reservation" ? 3920 : prices[ticketId] ?? Math.round((billedCoin + billedReward) * 1.4);
-  return { id: document.id, at, maidId: maidId(document, maidIdsByNickname), customerId: pseudonymizeCustomerId(document.parentId, secret), type, revenue, cheki: 0 };
+  // 分類・収益・重みは lib/metrics.ts（core.py と一致する単一の正典）に委譲する。
+  const type = classifyVisit(ticketId, roomType);
+  const revenue = visitRevenue(type, ticketId, billedCoin, billedReward);
+  const weight = visitWeight(numberValue(document.data.initialTime) || undefined);
+  return { id: document.id, at, maidId: maidId(document, maidIdsByNickname), customerId: pseudonymizeCustomerId(document.parentId, secret), type, revenue, cheki: 0, weight };
 }
 
 export function mapCheki(document: SourceDocument, secret: string, maidIdsByNickname: Map<string, string>, syncedAt: string): ChekiRow | null {

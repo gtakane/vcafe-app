@@ -24,6 +24,28 @@ test("maps a paid visit with the known ticket price", () => {
   assert.equal(visit?.maidId, "maid-1");
   assert.equal(visit?.revenue, 840);
   assert.equal(visit?.type, "paid");
+  assert.equal(visit?.weight, 1); // initialTime未設定 → 既定20 → 重み1
+});
+
+test("derives the visit weight from initialTime (core.py と一致)", () => {
+  const visit = mapVisit({ id: "visit-2", parentId: "user-1", data: { enterDateTime: timestamp("2026-07-21T10:00:00Z"), usedTicketItemId: "gokitaku30minutes", billedCoin: 600, initialTime: 40 } }, secret, new Map());
+  assert.equal(visit?.weight, 2); // 40分 → 重み2
+});
+
+test("classifies a zero-coin non-trial visit as paid, not free", () => {
+  // 旧実装は billedCoin+reward<=0 を free に誤分類していた。core.py は有料扱い。
+  const visit = mapVisit({ id: "visit-3", parentId: "user-1", data: { enterDateTime: timestamp("2026-07-21T10:00:00Z"), usedTicketItemId: "ATCOIN", billedCoin: 0 } }, secret, new Map());
+  assert.equal(visit?.type, "paid");
+  assert.equal(visit?.revenue, 0); // round(0 * 1.4)
+});
+
+test("classifies reservation and trial visits", () => {
+  const reservation = mapVisit({ id: "visit-4", parentId: "user-1", data: { enterDateTime: timestamp("2026-07-21T10:00:00Z"), roomType: "reservation", usedTicketItemId: "gokitaku30minutes" } }, secret, new Map());
+  assert.equal(reservation?.type, "reservation");
+  assert.equal(reservation?.revenue, 3920);
+  const trial = mapVisit({ id: "visit-5", parentId: "user-1", data: { enterDateTime: timestamp("2026-07-21T10:00:00Z"), usedTicketItemId: "trial10minutes" } }, secret, new Map());
+  assert.equal(trial?.type, "trial");
+  assert.equal(trial?.revenue, 0);
 });
 
 test("builds the maid lookup and maps actual shift timestamps", () => {

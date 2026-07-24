@@ -30,6 +30,8 @@ export interface Visit {
   type: "paid" | "trial" | "free" | "reservation";
   revenue: number;
   cheki: number;
+  // 滞在時間による重み（core.py: max(1, round(initialTime/20))）。ご帰宅数の集計に使用。
+  weight: number;
 }
 
 export interface Shift {
