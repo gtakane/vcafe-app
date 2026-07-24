@@ -80,18 +80,47 @@ async function syncWindow(start: Date, end: Date) {
   console.info(JSON.stringify({ dryRun: config.dryRun, window: { start: start.toISOString(), end: end.toISOString() }, counts: { customers: customers.length, visits: visits.length, cheki: cheki.length, shifts: shifts.length } }));
 }
 
-// BACKFILL_DAYS が指定されていれば過去N日を24時間窓で古い順に取り込む。無ければ通常の単一窓。
+// バックフィル設定（いずれも無ければ通常の単一窓＝増分同期）:
+//   BACKFILL_FROM=YYYY-MM-DD … その日(UTC)から現在までを24時間窓で取り込む
+//   BACKFILL_DAYS=N          … 過去N日を24時間窓で取り込む
 const DAY_MS = 24 * 60 * 60 * 1000;
+const backfillFrom = (process.env.BACKFILL_FROM || "").trim();
 const backfillDays = Number(process.env.BACKFILL_DAYS || 0);
-if (Number.isInteger(backfillDays) && backfillDays > 0) {
-  if (backfillDays > 400) throw new Error("BACKFILL_DAYSは400以下にしてください");
+
+const windows: Array<[Date, Date]> = [];
+if (backfillFrom || (Number.isInteger(backfillDays) && backfillDays > 0)) {
   const now = Date.now();
-  for (let day = backfillDays; day >= 1; day -= 1) {
-    const windowStart = new Date(now - day * DAY_MS);
-    const windowEnd = new Date(now - (day - 1) * DAY_MS);
-    console.info(`BACKFILL day -${day}: ${windowStart.toISOString()} .. ${windowEnd.toISOString()}`);
-    await syncWindow(windowStart, windowEnd);
+  let startMs: number;
+  if (backfillFrom) {
+    const parsed = new Date(`${backfillFrom}T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime())) throw new Error("BACKFILL_FROMはYYYY-MM-DD形式で指定してください");
+    startMs = parsed.getTime();
+  } else {
+    startMs = now - backfillDays * DAY_MS;
+  }
+  const totalWindows = Math.ceil((now - startMs) / DAY_MS);
+  if (totalWindows < 1) throw new Error("バックフィル開始日が未来です");
+  if (totalWindows > 550) throw new Error(`バックフィル窓が多すぎます(${totalWindows})。550日以内にしてください`);
+  for (let cursor = startMs; cursor < now; cursor += DAY_MS) {
+    windows.push([new Date(cursor), new Date(Math.min(cursor + DAY_MS, now))]);
   }
 } else {
-  await syncWindow(config.start, config.end);
+  windows.push([config.start, config.end]);
+}
+
+// 窓ごとに実行。1窓失敗しても残りは続行し、最後にまとめて報告する（大量バックフィルの耐障害性）。
+let failedWindows = 0;
+for (const [windowStart, windowEnd] of windows) {
+  try {
+    if (windows.length > 1) console.info(`WINDOW ${windowStart.toISOString()} .. ${windowEnd.toISOString()}`);
+    await syncWindow(windowStart, windowEnd);
+  } catch (error) {
+    failedWindows += 1;
+    const err = error as { message?: string };
+    console.error(`WINDOW_FAILED ${windowStart.toISOString()} .. ${windowEnd.toISOString()} : ${err?.message}`);
+  }
+}
+if (failedWindows > 0) {
+  console.error(`バックフィル完了: ${failedWindows}/${windows.length} 窓が失敗`);
+  if (failedWindows === windows.length) process.exit(1);
 }
