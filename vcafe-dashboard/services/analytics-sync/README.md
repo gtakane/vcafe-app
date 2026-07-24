@@ -33,7 +33,25 @@ DRY_RUN=true
 
 ## テーブル作成
 
-`schema.sql`の`PROJECT_ID`と`DATASET_ID`を分析用の値へ置換して実行します。履歴テーブルと重複排除ビューを作成します。
+`apply-schema.sh` が `schema.sql` の `PROJECT_ID`/`DATASET_ID` を置換し、分析用プロジェクトにデータセット・履歴テーブル・重複排除ビューを作成します（分析用プロジェクトにのみ書き込む安全な操作）。
+
+```bash
+./services/analytics-sync/apply-schema.sh
+```
+
+`visits_raw` には滞在時間の重み `weight`（core.py の `visitWeight` と一致）を保持し、日次集計は営業日（0:00〜1:59を前日扱い）で行います。
+
+## 本番Firestoreのインデックス
+
+collectionGroup範囲クエリのため、本番プロジェクトに COLLECTION_GROUP スコープの単一フィールドインデックスが必要です。定義は `firestore.indexes.json` にあります（未作成だと同期は `FAILED_PRECONDITION` で失敗）。
+
+```bash
+firebase deploy --only firestore:indexes --project v-athome-cafe-app --config services/analytics-sync/firestore.indexes.json
+```
+
+## 有効化手順
+
+初回の非接続デプロイから実稼働までの各ステップ（スキーマ適用・インデックス・HMACシークレット・本番読み取りIAM・DRY_RUN確認・Scheduler）は `../../docs/enable-sync-runbook.md` を参照してください。
 
 ## コンテナ作成
 

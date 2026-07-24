@@ -1,0 +1,30 @@
+{
+  "__comment__": "本番プロジェクト(v-athome-cafe-app)に必要な collection group スコープの単一フィールドインデックス。分析同期(index.ts)は userRecordVisits/enterDateTime, userAlbum/date, workshifts/openTime に対する collectionGroup の範囲クエリを実行するため、COLLECTION_GROUP スコープのインデックスが必要。これが無いと同期クエリは FAILED_PRECONDITION で失敗する。デプロイ: firebase deploy --only firestore:indexes --project v-athome-cafe-app（本番プロジェクトのオーナー権限が必要。データは変更しない）。",
+  "indexes": [],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "userRecordVisits",
+      "fieldPath": "enterDateTime",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    },
+    {
+      "collectionGroup": "userAlbum",
+      "fieldPath": "date",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    },
+    {
+      "collectionGroup": "workshifts",
+      "fieldPath": "openTime",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    }
+  ]
+}

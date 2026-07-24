@@ -30,7 +30,9 @@ export async function GET() {
       };
     });
     return NextResponse.json({ submissions }, { headers: { "Cache-Control": "private, no-store" } });
-  } catch {
+  } catch (error) {
+    // 原因（例: Firestoreインデックス未整備）を運用時に切り分けられるようサーバーログへ残す。
+    console.error("discordShiftSubmissions の取得に失敗しました", error);
     return NextResponse.json({ error: "Discord勤怠申請を取得できませんでした" }, { status: 503 });
   }
 }
