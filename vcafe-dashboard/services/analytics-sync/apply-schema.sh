@@ -18,7 +18,11 @@ echo "データセットを作成（存在すれば無視）: ${PROJECT_ID}:${DA
 bq --project_id="${PROJECT_ID}" --location="${LOCATION}" mk --dataset --force "${PROJECT_ID}:${DATASET_ID}" || true
 
 echo "schema.sql のプレースホルダを置換して実行します。"
-SQL="$(sed -e "s/PROJECT_ID/${PROJECT_ID}/g" -e "s/DATASET_ID/${DATASET_ID}/g" "${SCRIPT_DIR}/schema.sql")"
-bq --project_id="${PROJECT_ID}" --location="${LOCATION}" query --use_legacy_sql=false "${SQL}"
+FILLED_SQL="$(mktemp)"
+trap 'rm -f "${FILLED_SQL}"' EXIT
+sed -e "s/PROJECT_ID/${PROJECT_ID}/g" -e "s/DATASET_ID/${DATASET_ID}/g" "${SCRIPT_DIR}/schema.sql" > "${FILLED_SQL}"
+# schema.sql は先頭が "--" コメント行のため、SQLを引数で渡すと bq がフラグと誤認して
+# RecursionError になる。stdin から渡してSQLコメントとして正しく解釈させる。
+bq --project_id="${PROJECT_ID}" --location="${LOCATION}" query --use_legacy_sql=false < "${FILLED_SQL}"
 
 echo "完了: テーブルと *_current ビューを ${PROJECT_ID}:${DATASET_ID} に適用しました。"
