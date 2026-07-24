@@ -2,7 +2,7 @@ import { BigQuery } from "@google-cloud/bigquery";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { loadSyncConfig } from "./config.ts";
-import { buildMaidMap, mapCheki, mapShift, mapUser, mapVisit, type SourceDocument } from "./transform.ts";
+import { buildMaidMap, mapCheki, mapMaidProfile, mapMonthlyReport, mapShift, mapUser, mapVisit, type SourceDocument } from "./transform.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
 process.on("unhandledRejection", (error) => {
@@ -78,6 +78,29 @@ async function syncWindow(start: Date, end: Date) {
   ]);
 
   console.info(JSON.stringify({ dryRun: config.dryRun, window: { start: start.toISOString(), end: end.toISOString() }, counts: { customers: customers.length, visits: visits.length, cheki: cheki.length, shifts: shifts.length } }));
+}
+
+// maidWorkReport（メイド名簿＋月次実績）を全件スナップショット同期する。
+// 時系列イベントではないため窓は使わず、実行ごとに1回だけ最新状態を取り込む。
+async function syncMaidReports() {
+  const profileSnapshot = await sourceDb.collection("maidWorkReport").limit(5000).get();
+  const profiles = profileSnapshot.docs.map((document) => mapMaidProfile(document.id, document.data()));
+
+  const monthlySnapshot = await sourceDb.collectionGroup("monthlyReport").limit(50000).get();
+  const monthly = monthlySnapshot.docs
+    .filter((document) => document.ref.parent.parent?.parent?.id === "maidWorkReport")
+    .map((document) => mapMonthlyReport(document.ref.parent.parent!.id, document.id, document.data()));
+
+  await Promise.all([
+    insertRows("maid_profiles_raw", profiles.map((row) => ({ ...row, syncedAt }))),
+    insertRows("maid_monthly_raw", monthly.map((row) => ({ ...row, syncedAt }))),
+  ]);
+  console.info(JSON.stringify({ maidReports: { profiles: profiles.length, monthly: monthly.length } }));
+}
+
+// メイドレポートは実行ごとに1回だけ同期（SKIP_MAID_REPORTS=trueで無効化可）。
+if (process.env.SKIP_MAID_REPORTS !== "true") {
+  await syncMaidReports();
 }
 
 // バックフィル設定（いずれも無ければ通常の単一窓＝増分同期）:

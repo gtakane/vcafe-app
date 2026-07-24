@@ -91,3 +91,69 @@ export function buildMaidMap(shifts: SourceDocument[]) {
   });
   return map;
 }
+
+// ---- maidWorkReport（メイド名簿＋月次実績）: 顧客PIIを含まないため仮名化不要 ----
+
+export interface MaidProfileRow {
+  id: string;
+  nickname: string;
+  active: boolean;
+  hourlyPay: number;
+  registrationDate: string | null;
+}
+
+export interface MaidMonthlyRow {
+  maidId: string;
+  month: string;
+  attendance: number;
+  attendanceReserve: number;
+  days: number;
+  late: number;
+  latetime: number;
+  lateReservation: number;
+  latetimeReservation: number;
+  totalReservation: number;
+  totalWorkTimes: number;
+  totalWorkTimesReserve: number;
+  totalVisits: number;
+  totalOtameshi: number;
+  totalPresents: number;
+  totalPresentsPrice: number;
+  totalPhoto: number;
+  totalBirthdayPhotos: number;
+}
+
+// maidWorkReport/{maidId} = メイドのプロフィール。
+export function mapMaidProfile(id: string, data: Record<string, unknown>): MaidProfileRow {
+  return {
+    id,
+    nickname: String(data.nickname ?? "").trim() || "名称未設定",
+    active: data.active === true,
+    hourlyPay: numberValue(data.hourlyPay),
+    registrationDate: firestoreTimestampToIso(data.registrationDate),
+  };
+}
+
+// maidWorkReport/{maidId}/monthlyReport/{YYYYMM} = 月次実績（本番のフィールド名をそのまま保持）。
+export function mapMonthlyReport(maidId: string, month: string, data: Record<string, unknown>): MaidMonthlyRow {
+  return {
+    maidId,
+    month,
+    attendance: numberValue(data.Attendance),
+    attendanceReserve: numberValue(data.AttendanceReserve),
+    days: numberValue(data.days),
+    late: numberValue(data.late),
+    latetime: numberValue(data.latetime),
+    lateReservation: numberValue(data.lateReservation),
+    latetimeReservation: numberValue(data.latetimeReservation),
+    totalReservation: numberValue(data.totalReservation),
+    totalWorkTimes: numberValue(data.totalWorkTimes),
+    totalWorkTimesReserve: numberValue(data.totalWorkTimesReserve),
+    totalVisits: numberValue(data.totalVisits),
+    totalOtameshi: numberValue(data.totalOtameshi),
+    totalPresents: numberValue(data.totalPresents),
+    totalPresentsPrice: numberValue(data.totalPresentsPrice),
+    totalPhoto: numberValue(data.totalPhoto),
+    totalBirthdayPhotos: numberValue(data.totalBirthdayPhotos),
+  };
+}

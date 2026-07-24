@@ -51,6 +51,57 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.shifts_raw` (
 PARTITION BY DATE(scheduledStart)
 CLUSTER BY maidId;
 
+-- maidWorkReport/{maidId} = メイド名簿
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.maid_profiles_raw` (
+  id STRING NOT NULL,
+  nickname STRING NOT NULL,
+  active BOOL,
+  hourlyPay FLOAT64,
+  registrationDate TIMESTAMP,
+  syncedAt TIMESTAMP NOT NULL
+)
+CLUSTER BY id;
+
+-- maidWorkReport/{maidId}/monthlyReport/{YYYYMM} = 月次実績（本番フィールド名のまま）
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.maid_monthly_raw` (
+  maidId STRING NOT NULL,
+  month STRING NOT NULL,
+  attendance FLOAT64,
+  attendanceReserve FLOAT64,
+  days FLOAT64,
+  late FLOAT64,
+  latetime FLOAT64,
+  lateReservation FLOAT64,
+  latetimeReservation FLOAT64,
+  totalReservation FLOAT64,
+  totalWorkTimes FLOAT64,
+  totalWorkTimesReserve FLOAT64,
+  totalVisits FLOAT64,
+  totalOtameshi FLOAT64,
+  totalPresents FLOAT64,
+  totalPresentsPrice FLOAT64,
+  totalPhoto FLOAT64,
+  totalBirthdayPhotos FLOAT64,
+  syncedAt TIMESTAMP NOT NULL
+)
+CLUSTER BY maidId, month;
+
+CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.maid_profiles_current` AS
+SELECT * EXCEPT(row_number, syncedAt)
+FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY syncedAt DESC) AS row_number
+  FROM `PROJECT_ID.DATASET_ID.maid_profiles_raw`
+)
+WHERE row_number = 1;
+
+CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.maid_monthly_current` AS
+SELECT * EXCEPT(row_number, syncedAt)
+FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY maidId, month ORDER BY syncedAt DESC) AS row_number
+  FROM `PROJECT_ID.DATASET_ID.maid_monthly_raw`
+)
+WHERE row_number = 1;
+
 CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.customers_current` AS
 SELECT * EXCEPT(row_number, syncedAt, sourceUpdatedAt)
 FROM (
@@ -67,12 +118,20 @@ FROM (
 )
 WHERE row_number = 1;
 
+-- メイド一覧は名簿(maid_profiles)を正とし、名簿に無いがシフト/ご帰宅に現れるmaidIdも補完する。
 CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.maids_current` AS
-SELECT maidId AS id, ARRAY_AGG(maidName ORDER BY scheduledStart DESC LIMIT 1)[OFFSET(0)] AS name,
-       SUBSTR(ARRAY_AGG(maidName ORDER BY scheduledStart DESC LIMIT 1)[OFFSET(0)], 1, 1) AS avatar,
-       "active" AS status
-FROM `PROJECT_ID.DATASET_ID.shifts_raw`
-GROUP BY maidId;
+WITH from_profiles AS (
+  SELECT id, nickname AS name, IF(active, "active", "inactive") AS status
+  FROM `PROJECT_ID.DATASET_ID.maid_profiles_current`
+), from_shifts AS (
+  SELECT maidId AS id, ARRAY_AGG(maidName ORDER BY scheduledStart DESC LIMIT 1)[OFFSET(0)] AS name, "active" AS status
+  FROM `PROJECT_ID.DATASET_ID.shifts_raw`
+  WHERE maidId NOT IN (SELECT id FROM from_profiles)
+  GROUP BY maidId
+)
+SELECT id, name, SUBSTR(name, 1, 1) AS avatar, status FROM from_profiles
+UNION ALL
+SELECT id, name, SUBSTR(name, 1, 1) AS avatar, status FROM from_shifts;
 
 CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.visits_current` AS
 WITH latest_visits AS (
