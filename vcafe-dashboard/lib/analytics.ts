@@ -48,16 +48,13 @@ export function scopeDataForViewer(data: AnalyticsData, viewer: Viewer): Analyti
 
 export function filterData(data: AnalyticsData, viewer: Viewer, filter: AnalyticsFilter): AnalyticsData {
   const maidId = enforceMaidScope(viewer, filter.maidId);
-  const start = new Date(`${filter.start}T00:00:00+09:00`).getTime();
-  const end = new Date(`${filter.end}T23:59:59.999+09:00`).getTime();
-  const visits = data.visits.filter((v) => {
-    const at = new Date(v.at).getTime();
-    return at >= start && at <= end && (!maidId || v.maidId === maidId);
-  });
-  const shifts = data.shifts.filter((s) => {
-    const at = new Date(s.scheduledStart).getTime();
-    return at >= start && at <= end && (!maidId || s.maidId === maidId);
-  });
+  // 営業日(0:00〜1:59は前日)で絞る。"YYYY-MM-DD"の文字列比較は時系列比較と一致する。
+  const inRange = (iso: string) => {
+    const businessDay = businessDateJst(iso);
+    return businessDay >= filter.start && businessDay <= filter.end;
+  };
+  const visits = data.visits.filter((v) => inRange(v.at) && (!maidId || v.maidId === maidId));
+  const shifts = data.shifts.filter((s) => inRange(s.scheduledStart) && (!maidId || s.maidId === maidId));
   const visibleMaidIds = maidId ? new Set([maidId]) : new Set(data.maids.map((m) => m.id));
   const visibleCustomerIds = new Set(visits.map((v) => v.customerId));
   return {

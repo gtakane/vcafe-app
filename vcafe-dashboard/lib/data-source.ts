@@ -18,10 +18,10 @@ export async function loadAnalyticsData(query: DataQuery): Promise<AnalyticsData
   if (!projectId || !dataset) throw new Error("BigQueryの環境変数が設定されていません");
   const bigquery = new BigQuery({ projectId });
   const location = process.env.BIGQUERY_LOCATION || "asia-northeast1";
-  const startAt = new Date(`${query.start}T00:00:00+09:00`);
-  const endAt = new Date(`${query.end}T23:59:59.999+09:00`);
   const maidWhere = query.maidId ? "AND maidId = @maidId" : "";
-  const params: Record<string, Date | string> = { startAt, endAt };
+  // 営業日(19:00〜翌02:00)で絞る。JSTから2時間引いた日付が営業日。
+  const businessDate = (column: string) => `DATE(TIMESTAMP_SUB(${column}, INTERVAL 2 HOUR), "Asia/Tokyo")`;
+  const params: Record<string, Date | string> = { startDate: query.start, endDate: query.end };
   if (query.maidId) params.maidId = query.maidId;
   const [rows] = await bigquery.query({
     location,
@@ -30,10 +30,10 @@ export async function loadAnalyticsData(query: DataQuery): Promise<AnalyticsData
     query: `
       WITH selected_visits AS (
         SELECT * FROM \`${projectId}.${dataset}.visits_current\`
-        WHERE \`at\` BETWEEN @startAt AND @endAt ${maidWhere}
+        WHERE ${businessDate("`at`")} BETWEEN DATE(@startDate) AND DATE(@endDate) ${maidWhere}
       ), selected_shifts AS (
         SELECT * FROM \`${projectId}.${dataset}.shifts_current\`
-        WHERE scheduledStart BETWEEN @startAt AND @endAt ${maidWhere}
+        WHERE ${businessDate("scheduledStart")} BETWEEN DATE(@startDate) AND DATE(@endDate) ${maidWhere}
       )
       SELECT 'maid' AS kind, TO_JSON_STRING(t) AS payload
       FROM \`${projectId}.${dataset}.maids_current\` t ${query.maidId ? "WHERE id = @maidId" : ""}
