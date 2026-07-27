@@ -181,7 +181,7 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><div className="brand-mark">V</div><div><strong>Vあっと</strong><span>ANALYTICS</span></div></div>
+      <div className="brand"><img className="brand-logo" src="/logo.png" alt="Virtual at-home cafe" onError={(e) => { const img = e.currentTarget; img.style.display = "none"; const fb = img.nextElementSibling as HTMLElement | null; if (fb) fb.style.display = "grid"; }} /><div className="brand-mark" style={{ display: "none" }}>at</div></div>
       <nav>{nav.filter((item)=>!item.adminOnly || viewer.role === "admin").map((item)=><button key={item.id} className={view===item.id?"active":""} onClick={()=>setView(item.id)}><i>{item.icon}</i>{item.label}</button>)}</nav>
       <div className="sidebar-foot"><span className="status-dot"/>分析環境のみ参照<small>本番DBへの書き込みなし</small></div>
     </aside>
