@@ -138,6 +138,15 @@ tbody tr:hover{background:#fdf7fc}
 .late{background:#fdeaef;color:#cf5a76}
 .ok{background:#e9f8f1;color:#2f9a72}
 .muted{color:var(--muted);font-size:12px;padding:16px}
+/* テーブル上部の絞り込みバー */
+.table-filters{display:flex;flex-wrap:wrap;gap:12px;align-items:end;padding:0 20px 16px;border-bottom:1px solid var(--line)}
+.table-filters label{display:grid;gap:4px;color:var(--muted);font-size:10px;font-weight:700}
+.table-filters input,.table-filters select{height:34px;border:1px solid #e7dced;border-radius:9px;padding:0 10px;color:var(--ink);background:#fff;font-size:12px}
+.table-filters input[type=number]{width:96px}
+.table-filters .search{height:34px}
+.table-filters button{align-self:end}
+/* 指標名の横の説明マーク（hoverで定義を表示） */
+.hint-mark{display:inline-grid;place-items:center;width:13px;height:13px;margin-left:5px;border-radius:50%;background:var(--grad-soft);color:#8a4f86;font-size:9px;font-weight:800;cursor:help;vertical-align:middle}
 .def-list{margin:0;display:grid;gap:12px}
 .def-list div{display:grid;gap:3px}
 .def-list dt{font-weight:800;font-size:12px;color:var(--ink)}

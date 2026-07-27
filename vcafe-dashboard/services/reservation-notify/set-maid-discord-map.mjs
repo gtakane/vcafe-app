@@ -55,7 +55,14 @@ if (has("--list")) {
 const file = arg("--file");
 if (file) {
   const entries = JSON.parse(readFileSync(file, "utf8"));
-  for (const entry of entries) await upsert(entry);
+  let done = 0, skipped = 0;
+  for (const entry of entries) {
+    // discordUserId 未記入の行はスキップ（ひな形をそのまま投入できるように）。
+    if (!String(entry.discordUserId || "").trim()) { skipped += 1; continue; }
+    await upsert(entry);
+    done += 1;
+  }
+  console.log(`登録 ${done}件 / 未記入スキップ ${skipped}件`);
 } else {
   await upsert({ maidId: arg("--maidId"), nickname: arg("--nickname"), discordUserId: arg("--discord") });
 }
