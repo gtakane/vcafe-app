@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Vあっと Analytics",
   description: "メイド実績とユーザー分析の統合ダッシュボード",
-  icons: { icon: "/logo.png" },
+  icons: { icon: "/logo-e.png" },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

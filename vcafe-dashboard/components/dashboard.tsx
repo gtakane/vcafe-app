@@ -3,28 +3,34 @@
 import { useEffect, useMemo, useState } from "react";
 import { buildTrend, customerRows, filterData, maidRows, summarize } from "@/lib/analytics";
 import type { AnalyticsData, AttendanceSubmission, Granularity, MaidMonthlyReport, MaidReportsResult, Viewer } from "@/lib/types";
+import type { GrowthMetrics } from "@/lib/growth";
 import LogoutButton from "@/components/logout-button";
 
-type View = "overview" | "maids" | "users" | "relations" | "attendance";
+type View = "overview" | "maids" | "growth" | "users" | "relations" | "attendance";
 
 const nav: Array<{ id: View; label: string; icon: string; adminOnly?: boolean }> = [
   { id: "overview", label: "ダッシュボード", icon: "⌂" },
   { id: "maids", label: "メイド実績", icon: "♙" },
+  { id: "growth", label: "グロース指標", icon: "⇗", adminOnly: true },
   { id: "users", label: "ユーザーDB", icon: "♧", adminOnly: true },
   { id: "relations", label: "メイド×ユーザー", icon: "◎", adminOnly: true },
   { id: "attendance", label: "勤怠", icon: "◷" },
 ];
 
+const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
+
 const yen = new Intl.NumberFormat("ja-JP", { style: "currency", currency: "JPY", maximumFractionDigits: 0 });
 const number = new Intl.NumberFormat("ja-JP");
 const jstDate = (value: string | null) => value ? new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value)) : "未設定";
 
-function LineChart({ points }: { points: Array<{ label: string; visits: number }> }) {
+function LineChart({ points, suffix = "件", ariaLabel = "ご帰宅数の推移" }: { points: Array<{ label: string; visits: number }>; suffix?: string; ariaLabel?: string }) {
   const width = 720, height = 220, pad = 28;
+  if (!points.length) return <div className="chart-wrap"><p className="muted" style={{ padding: "2rem 0", textAlign: "center" }}>この期間のデータがありません</p></div>;
   const max = Math.max(...points.map((p) => p.visits), 1);
   const coords = points.map((p, i) => ({ x: pad + (i * (width - pad * 2)) / Math.max(points.length - 1, 1), y: height - pad - (p.visits / max) * (height - pad * 2), ...p }));
   const path = coords.map((p, i) => `${i ? "L" : "M"}${p.x},${p.y}`).join(" ");
-  return <div className="chart-wrap"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="ご帰宅数の推移"><defs><linearGradient id="pinkFade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#ef5da8" stopOpacity=".28"/><stop offset="1" stopColor="#ef5da8" stopOpacity="0"/></linearGradient></defs>{[0,1,2,3].map((i)=><line key={i} x1={pad} x2={width-pad} y1={pad+i*(height-pad*2)/3} y2={pad+i*(height-pad*2)/3} stroke="#f1e8ed"/>)}{coords.length > 1 && <path d={`${path} L${coords.at(-1)!.x},${height-pad} L${coords[0].x},${height-pad} Z`} fill="url(#pinkFade)"/>}<path d={path} fill="none" stroke="#ef5da8" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"/>{coords.map((p)=><circle key={`${p.label}-${p.x}`} cx={p.x} cy={p.y} r="4" fill="white" stroke="#ef5da8" strokeWidth="3"><title>{p.label}: {p.visits}件</title></circle>)}{coords.map((p, i) => (points.length <= 24 || i % Math.ceil(points.length / 12) === 0) ? <text key={`v-${p.label}-${p.x}`} x={p.x} y={p.y - 9} textAnchor="middle" fontSize="11" fontWeight="700" fill="#c2185b">{number.format(p.visits)}</text> : null)}</svg><div className="x-labels">{points.filter((_,i)=>i===0||i===points.length-1||i===Math.floor(points.length/2)).map((p)=><span key={p.label}>{p.label}</span>)}</div></div>;
+  const single = coords.length === 1;
+  return <div className="chart-wrap"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={ariaLabel}><defs><linearGradient id="pinkFade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#ef5da8" stopOpacity=".28"/><stop offset="1" stopColor="#ef5da8" stopOpacity="0"/></linearGradient></defs>{[0,1,2,3].map((i)=><line key={i} x1={pad} x2={width-pad} y1={pad+i*(height-pad*2)/3} y2={pad+i*(height-pad*2)/3} stroke="#f1e8ed"/>)}{coords.length > 1 && <path d={`${path} L${coords.at(-1)!.x},${height-pad} L${coords[0].x},${height-pad} Z`} fill="url(#pinkFade)"/>}{!single && <path d={path} fill="none" stroke="#ef5da8" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"/>}{coords.map((p)=><circle key={`${p.label}-${p.x}`} cx={single ? width / 2 : p.x} cy={p.y} r={single ? 6 : 4} fill="white" stroke="#ef5da8" strokeWidth="3"><title>{p.label}: {p.visits}{suffix}</title></circle>)}{coords.map((p, i) => (points.length <= 24 || i % Math.ceil(points.length / 12) === 0) ? <text key={`v-${p.label}-${p.x}`} x={single ? width / 2 : p.x} y={p.y - 9} textAnchor="middle" fontSize="11" fontWeight="700" fill="#c2185b">{number.format(p.visits)}</text> : null)}</svg><div className="x-labels">{(single ? points : points.filter((_,i)=>i===0||i===points.length-1||i===Math.floor(points.length/2))).map((p)=><span key={p.label}>{p.label}</span>)}</div></div>;
 }
 
 function Metric({ label, value, note, tone = "pink" }: { label: string; value: string; note: string; tone?: string }) {
@@ -120,6 +126,33 @@ function MaidReports({ viewer }: { viewer: Viewer }) {
   </section>;
 }
 
+function GrowthPanel({ growth, loading, error }: { growth: GrowthMetrics | null; loading: boolean; error: string }) {
+  if (error) return <section className="panel"><p className="error">{error}</p></section>;
+  if (!growth) return <section className="panel"><p className="muted">読込中…</p></section>;
+  const dauPoints = growth.daily.map((d) => ({ label: d.label, visits: d.dau }));
+  const defs: Array<{ term: string; body: string }> = [
+    { term: "DAU（平均 / ピーク）", body: "各営業日にご帰宅したユニークユーザー数。営業日は19:00〜翌2:00（0:00〜1:59は前日扱い）。平均は期間内の営業日平均、ピークは最大値。" },
+    { term: "新規登録者数", body: "選択期間内に会員登録（registrationDate）したユーザーの人数。" },
+    { term: "新規課金転換率", body: "期間内の新規登録者のうち、期間内に1回以上の有料ご帰宅（予約を含む）をした人の割合。" },
+    { term: "離脱率", body: "直前の同じ長さの期間にご帰宅があったユーザーのうち、当期間に一度もご帰宅しなかった人の割合。" },
+    { term: "占有率 / 空席率", body: "各営業日にシフトのあったメイド枠のうち、ゲストが付いた枠の割合が占有率、付かなかった割合が空席率（期間平均）。座席数データが連携されれば席ベースの定義に差し替え可能。" },
+  ];
+  return <>
+    <section className="metrics">
+      <Metric label="新規登録者数" value={`${number.format(growth.newRegistrations)}名`} note="期間内に会員登録" tone="pink" />
+      <Metric label="新規課金転換率" value={pct(growth.newPaidConversionRate)} note={`${number.format(growth.newPaidConversions)}/${number.format(growth.newRegistrations)}名が有料化`} tone="purple" />
+      <Metric label="離脱率" value={pct(growth.churnRate)} note={`前期${number.format(growth.prevActiveUsers)}名中${number.format(growth.churnedUsers)}名が未ご帰宅`} tone="orange" />
+      <Metric label="平均DAU" value={`${number.format(growth.avgDau)}名`} note={`ピーク ${number.format(growth.peakDau)}名`} tone="blue" />
+      <Metric label="占有率" value={pct(growth.occupancyRate)} note="ゲストが付いたメイド枠" tone="purple" />
+      <Metric label="空席率" value={pct(growth.vacancyRate)} note="シフト有・ゲスト無の枠" tone="pink" />
+    </section>
+    <section className="grid-2">
+      <article className="panel"><div className="panel-head"><div><p className="eyebrow">DAILY ACTIVE USERS</p><h2>DAUの推移</h2></div><span className="badge">{loading ? "更新中" : "営業日"}</span></div><LineChart points={dauPoints} suffix="名" ariaLabel="DAUの推移" /></article>
+      <article className="panel"><div className="panel-head"><div><p className="eyebrow">DEFINITIONS</p><h2>指標の定義</h2><small>前期間 {growth.prevStart}〜{growth.prevEnd} と比較</small></div></div><dl className="def-list">{defs.map((d) => <div key={d.term}><dt>{d.term}</dt><dd>{d.body}</dd></div>)}</dl></article>
+    </section>
+  </>;
+}
+
 export default function Dashboard({ initialData, initialStart, initialEnd, viewer }: { initialData: AnalyticsData; initialStart: string; initialEnd: string; viewer: Viewer }) {
   const [view, setView] = useState<View>("overview");
   const [start, setStart] = useState(initialStart);
@@ -132,6 +165,23 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
   const [loadError, setLoadError] = useState("");
   const [submissions, setSubmissions] = useState<AttendanceSubmission[]>([]);
   const [submissionError, setSubmissionError] = useState("");
+  const [growth, setGrowth] = useState<GrowthMetrics | null>(null);
+  const [growthLoading, setGrowthLoading] = useState(false);
+  const [growthError, setGrowthError] = useState("");
+  useEffect(() => {
+    if (viewer.role !== "admin") return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setGrowthLoading(true); setGrowthError("");
+      try {
+        const response = await fetch(`/api/growth?${new URLSearchParams({ start, end })}`, { signal: controller.signal, cache: "no-store" });
+        if (!response.ok) throw new Error((await response.json()).error || "グロース指標を取得できませんでした");
+        setGrowth(await response.json());
+      } catch (error) { if (!controller.signal.aborted) setGrowthError(error instanceof Error ? error.message : "グロース指標を取得できませんでした"); }
+      finally { if (!controller.signal.aborted) setGrowthLoading(false); }
+    }, 250);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [start, end, viewer.role]);
   useEffect(() => {
     if (viewer.role !== "admin") return;
     const controller = new AbortController();
@@ -181,7 +231,7 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><img className="brand-logo" src="/logo.png" alt="Virtual at-home cafe" onError={(e) => { const img = e.currentTarget; img.style.display = "none"; const fb = img.nextElementSibling as HTMLElement | null; if (fb) fb.style.display = "grid"; }} /><div className="brand-mark" style={{ display: "none" }}>at</div></div>
+      <div className="brand"><img className="brand-logo" src="/logo-e.png" alt="Virtual at-home cafe" onError={(e) => { const img = e.currentTarget; img.style.display = "none"; const fb = img.nextElementSibling as HTMLElement | null; if (fb) fb.style.display = "grid"; }} /><div className="brand-mark" style={{ display: "none" }}>at</div></div>
       <nav>{nav.filter((item)=>!item.adminOnly || viewer.role === "admin").map((item)=><button key={item.id} className={view===item.id?"active":""} onClick={()=>setView(item.id)}><i>{item.icon}</i>{item.label}</button>)}</nav>
       <div className="sidebar-foot"><span className="status-dot"/>分析環境のみ参照<small>本番DBへの書き込みなし</small></div>
     </aside>
@@ -196,12 +246,14 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
       <div className="freshness"><span className="status-dot"/> 最終同期 {new Date(remoteData.generatedAt).toLocaleString("ja-JP",{timeZone:"Asia/Tokyo"})} <b>・分析用データ</b>{loading && " ・読込中"}{loadError && <span className="error-inline"> ・{loadError}</span>}</div>
 
       {view === "overview" && <>
-        <section className="metrics"><Metric label="ご帰宅数" value={`${number.format(totals.visits)}件`} note={`ユニーク ${totals.customerCount}名`}/><Metric label="売上" value={yen.format(totals.revenue)} note={`有料ご帰宅 ${totals.paid}件`} tone="purple"/><Metric label="実働時間" value={`${totals.workHours.toFixed(1)}h`} note={`遅刻合計 ${totals.lateMinutes.toFixed(0)}分`} tone="blue"/><Metric label="記念撮影" value={`${totals.cheki}枚`} note={`撮影率 ${totals.visits ? (totals.cheki/totals.visits*100).toFixed(1) : 0}%`} tone="orange"/></section>
+        <section className="metrics"><Metric label="ご帰宅数" value={`${number.format(totals.visits)}件`} note={`ユニーク ${totals.customerCount}名`}/><Metric label="売上" value={yen.format(totals.revenue)} note={`有料ご帰宅 ${totals.paid}件`} tone="purple"/><Metric label="実働時間" value={`${totals.workHours.toFixed(1)}h`} note={`遅刻合計 ${totals.lateMinutes.toFixed(0)}分`} tone="blue"/><Metric label="記念撮影" value={`${totals.cheki}枚`} note={`撮影率 ${totals.visits ? (totals.cheki/totals.visits*100).toFixed(1) : 0}%`} tone="orange"/>{viewer.role === "admin" && <><Metric label="DAU（平均）" value={growth ? `${number.format(growth.avgDau)}名` : "—"} note={growth ? `ピーク ${number.format(growth.peakDau)}名` : (growthError || "集計中")} tone="blue"/><Metric label="新規登録者数" value={growth ? `${number.format(growth.newRegistrations)}名` : "—"} note={growth ? `課金転換 ${pct(growth.newPaidConversionRate)}` : (growthError || "集計中")} tone="purple"/></>}</section>
         <section className="grid-2"><article className="panel"><div className="panel-head"><div><p className="eyebrow">PERFORMANCE TREND</p><h2>ご帰宅数の推移</h2></div><span className="badge">{granularity === "hour" ? "時間別" : granularity === "day" ? "日次" : granularity === "week" ? "週次" : "月次"}</span></div><LineChart points={trend}/></article><article className="panel"><div className="panel-head"><div><p className="eyebrow">POPULAR MAIDS</p><h2>{viewer.role === "admin" ? "人気メイド" : "実績内訳"}</h2></div></div><div className="ranking">{maidStats.slice(0,5).map((m,i)=><div className="rank-row" key={m.id}><span className="rank">{i+1}</span><span className="mini-avatar">{m.avatar}</span><div><strong>{m.name}</strong><small>{m.perHour.toFixed(2)}件/h・撮影{m.cheki}・{m.users}名</small></div><div className="bar"><i style={{width:`${maidStats[0]?.score ? m.score/maidStats[0].score*100 : 0}%`}}/></div><b>{m.visits}</b></div>)}</div></article></section>
         <section className="grid-2"><article className="panel"><div className="panel-head"><div><p className="eyebrow">CUSTOMER MIX</p><h2>ユーザーランク構成</h2></div></div><div className="rank-mix">{visibleRanks.map((rank)=>{const count=customerStats.filter((u)=>u.rank===rank).length;return <div key={rank}><span>{rank}</span><strong>{count}<small>名</small></strong><i><em style={{width:`${customerStats.length?count/customerStats.length*100:0}%`}}/></i></div>})}</div></article><article className="panel"><div className="panel-head"><div><p className="eyebrow">TOP CUSTOMERS</p><h2>{viewer.role === "admin" ? "ご帰宅ユーザー" : "お客様傾向"}</h2></div></div>{viewer.role === "admin" ? <div className="compact-users">{customerStats.slice(0,4).map((u)=><div key={u.id}><span className={`rank-pill ${u.rank}`}>{u.rank.slice(0,1)}</span><div><strong>{u.name}</strong><small>最終 {u.lastVisit}</small></div><b>{u.visits}回</b></div>)}</div> : <p className="privacy-note">メイド画面では個別ユーザー名を表示せず、ランク構成・リピート率など本人に関係する集計のみ表示します。</p>}</article></section>
       </>}
 
       {view === "maids" && <MaidReports viewer={viewer} />}
+
+      {view === "growth" && viewer.role === "admin" && <GrowthPanel growth={growth} loading={growthLoading} error={growthError} />}
 
       {view === "users" && viewer.role === "admin" && <section className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">CUSTOMER DATABASE</p><h2>ユーザーデータベース</h2></div><input className="search" value={userQuery} onChange={(e)=>setUserQuery(e.target.value)} placeholder="⌕ ユーザーを検索" /></div><div className="table-scroll"><table><thead><tr><th>ユーザー名</th><th>ランク</th><th>登録日</th><th>ご帰宅</th><th>利用額</th><th>最推しメイド</th><th>最終ご帰宅</th></tr></thead><tbody>{visibleCustomers.map((u)=><tr key={u.id}><td><b>{u.name}</b><small className="id">{u.id}</small></td><td><span className={`text-rank ${u.rank}`}>{u.rank}</span></td><td>{jstDate(u.registeredAt)}</td><td>{u.visits}回</td><td>{yen.format(u.spend)}</td><td>{u.favoriteMaid}</td><td>{u.lastVisit}</td></tr>)}</tbody></table></div></section>}
 

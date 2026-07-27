@@ -131,6 +131,10 @@ tbody tr:hover{background:#fdf7fc}
 .late{background:#fdeaef;color:#cf5a76}
 .ok{background:#e9f8f1;color:#2f9a72}
 .muted{color:var(--muted);font-size:12px;padding:16px}
+.def-list{margin:0;display:grid;gap:12px}
+.def-list div{display:grid;gap:3px}
+.def-list dt{font-weight:800;font-size:12px;color:var(--ink)}
+.def-list dd{margin:0;font-size:11px;line-height:1.6;color:var(--muted)}
 
 /* ---- Login ---- */
 .login-shell{min-height:100vh;display:grid;place-items:center;padding:20px;background:
