@@ -31,20 +31,30 @@ function printFields(data, indent) {
   for (const key of Object.keys(data).sort()) console.log(`${indent}${key}: ${preview(data[key])}`);
 }
 
-console.log(`\n## collectionGroup("${group}") のサンプル（最大3件・サブコレクションも1階層潜る）`);
-const snap = await db.collectionGroup(group).limit(3).get();
+// 予約は workshiftGroups/{availabledate順} 配下の "reservations" サブコレクションに入る想定。
+// availabledate 降順で最新日を見て、reservations サブコレクションの有無と中身を検証する。
+const orderField = process.argv[3] || "availabledate";
+let snap;
+try {
+  snap = await db.collection(group).orderBy(orderField, "desc").limit(8).get();
+  console.log(`\n## collection("${group}").orderBy("${orderField}","desc") のサンプル（最大8件・サブコレクションも確認）`);
+} catch (error) {
+  console.log(`\n## "${orderField}" で並び替えできなかったため未ソートで表示: ${error.message}`);
+  snap = await db.collection(group).limit(8).get();
+}
+
 if (snap.empty) {
-  console.log("(0件) 別のコレクション名を引数で指定して再実行してください。例: node inspect-reservations.mjs workshiftgroup");
+  console.log(`(0件) collection "${group}" が見つかりません。名前を引数で指定して再実行してください。`);
 } else {
   for (const [i, doc] of snap.docs.entries()) {
-    console.log(`\n[${i + 1}] path=${doc.ref.path}`);
-    printFields(doc.data(), "    ");
+    const data = doc.data();
+    console.log(`\n[${i + 1}] path=${doc.ref.path}  ${orderField}=${preview(data[orderField])}`);
+    printFields(data, "    ");
     const subs = await doc.ref.listCollections();
-    if (subs.length) console.log(`    (subcollections: ${subs.map((c) => c.id).join(", ")})`);
-    // サブコレクションの中身も少しだけ覗いて予約の在り処とフィールドを特定する。
+    console.log(`    (subcollections: ${subs.map((c) => c.id).join(", ") || "なし"})`);
     for (const sub of subs) {
-      const subSnap = await sub.limit(2).get();
-      console.log(`\n    └ subcollection "${sub.id}" のサンプル(${subSnap.size}件):`);
+      const subSnap = await sub.limit(3).get();
+      console.log(`    └ "${sub.id}" のサンプル(${subSnap.size}件):`);
       subSnap.docs.forEach((sd, j) => {
         console.log(`      (${j + 1}) path=${sd.ref.path}`);
         printFields(sd.data(), "        ");
