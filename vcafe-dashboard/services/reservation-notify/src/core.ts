@@ -89,9 +89,11 @@ export interface MaidDiscordMapping {
   byNickname: Map<string, string>; // nickname -> discordUserId
 }
 
-/** メイドのDiscordユーザーIDを解決する（maidId優先、無ければニックネーム）。 */
+/** メイドのDiscordユーザーIDを解決する（maidId優先、無ければニックネーム）。
+ *  ニックネームは日本語のUnicode正規化差（NFC/NFD）で一致漏れしないようNFCに正規化して比較する。 */
 export function resolveDiscordId(group: MaidReservationGroup, mapping: MaidDiscordMapping): string | undefined {
   if (group.maidId && mapping.byMaidId.has(group.maidId)) return mapping.byMaidId.get(group.maidId);
-  if (group.maidNickname && mapping.byNickname.has(group.maidNickname)) return mapping.byNickname.get(group.maidNickname);
+  const nick = group.maidNickname ? group.maidNickname.normalize("NFC") : "";
+  if (nick && mapping.byNickname.has(nick)) return mapping.byNickname.get(nick);
   return undefined;
 }

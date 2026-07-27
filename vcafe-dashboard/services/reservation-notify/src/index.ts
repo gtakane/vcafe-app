@@ -40,7 +40,7 @@ async function main() {
     const existing = await notifications.doc(docId).get();
     if (existing.exists && existing.get("status") === "sent") { alreadySent += 1; continue; }
     const discordUserId = resolveDiscordId(group, mapping);
-    if (!discordUserId) { unmapped.push(group.maidNickname || group.key); continue; }
+    if (!discordUserId) { unmapped.push(`${group.maidNickname || "?"}(maidId=${group.maidId || "-"})`); continue; }
     pending.push({ discordUserId, message: formatMaidMessage(window.day, group, config.showCustomer), docId, maidNickname: group.maidNickname, count: group.entries.length });
   }
 

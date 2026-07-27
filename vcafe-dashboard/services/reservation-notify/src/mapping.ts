@@ -18,7 +18,7 @@ export async function loadMaidDiscordMapping(managementDb: Firestore, config: No
     const discordUserId = String(data.discordUserId ?? "").trim();
     if (!discordUserId) return;
     const maidId = String(data.maidId ?? "").trim();
-    const nickname = String(data.nickname ?? data.maidNickname ?? "").trim();
+    const nickname = String(data.nickname ?? data.maidNickname ?? "").trim().normalize("NFC");
     if (maidId) byMaidId.set(maidId, discordUserId);
     if (nickname) byNickname.set(nickname, discordUserId);
   });
@@ -27,7 +27,7 @@ export async function loadMaidDiscordMapping(managementDb: Firestore, config: No
     const submissions = await managementDb.collection("discordShiftSubmissions").limit(5000).get();
     submissions.forEach((document) => {
       const data = document.data();
-      const nickname = String(data.maidNickname ?? data.maidName ?? data.nickname ?? data.name ?? "").trim();
+      const nickname = String(data.maidNickname ?? data.maidName ?? data.nickname ?? data.name ?? "").trim().normalize("NFC");
       const discordUserId = String(data.discordUserId ?? "").trim();
       if (nickname && discordUserId && !byNickname.has(nickname)) byNickname.set(nickname, discordUserId);
     });
