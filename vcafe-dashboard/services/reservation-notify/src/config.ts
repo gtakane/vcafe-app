@@ -7,8 +7,9 @@
 export const KNOWN_PRODUCTION_PROJECT_IDS = new Set<string>(["v-athome-cafe-app"]);
 
 export interface ReservationSourceConfig {
-  collectionGroup: string;
-  dateField: string;
+  parentCollection: string; // workshiftGroups（日付グループの親）
+  subCollection: string; // reservations（各グループ配下の予約）
+  dateField: string; // お給仕時刻フィールド（表示・並び用）
   maidIdField: string;
   maidNicknameField: string;
   customerLabelField: string; // "" なら顧客ラベルを取得しない
@@ -73,8 +74,9 @@ export function loadNotifyConfig(env: NodeJS.ProcessEnv): NotifyConfig {
     dryRun,
     notificationsCollection: env.NOTIFICATIONS_COLLECTION?.trim() || "reservationNotifications",
     source: {
-      collectionGroup: env.RESERVATION_COLLECTION_GROUP?.trim() || "userRecordVisits",
-      dateField: env.RESERVATION_DATE_FIELD?.trim() || "enterDateTime",
+      parentCollection: env.RESERVATION_PARENT_COLLECTION?.trim() || "workshiftGroups",
+      subCollection: env.RESERVATION_SUBCOLLECTION?.trim() || "reservations",
+      dateField: env.RESERVATION_DATE_FIELD?.trim() || "openTime",
       maidIdField: env.RESERVATION_MAID_ID_FIELD?.trim() || "maidId",
       maidNicknameField: env.RESERVATION_MAID_NICKNAME_FIELD?.trim() || "maidNickname",
       customerLabelField: env.RESERVATION_CUSTOMER_LABEL_FIELD?.trim() || "",

@@ -48,7 +48,7 @@ npm test
 | `DRY_RUN` | `true` | trueはログのみ。実送信は`false` |
 | `TARGET_OFFSET_DAYS` | `0` | 0=当日の営業日ぶんを通知 |
 | `SHOW_CUSTOMER` | `false` | DMにお客様名を含めるか |
-| `RESERVATION_COLLECTION_GROUP` | `reservations` | 予約のコレクション（collectionGroup） |
+| `RESERVATION_PARENT_COLLECTION` / `RESERVATION_SUBCOLLECTION` | `workshiftGroups` / `reservations` | 予約の格納先（対象日グループ配下を直接読む） |
 | `RESERVATION_DATE_FIELD` | `openTime` | お給仕開始時刻フィールド |
 | `RESERVATION_MAID_ID_FIELD` / `..._NICKNAME_FIELD` | `maidId` / `maidNickname` | 担当メイド |
 | `RESERVATION_CUSTOMER_LABEL_FIELD` | `rsvUserNickname` | お客様名（SHOW_CUSTOMER=true時に表示） |

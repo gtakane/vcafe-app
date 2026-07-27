@@ -3,7 +3,7 @@ import type { ReservationEntry } from "./core.ts";
 import type { ReservationSourceConfig } from "./config.ts";
 
 // Firestore Timestamp / Date / 文字列 / 数値 を ISO 文字列へ。
-function toIso(value: unknown): string | null {
+export function toIso(value: unknown): string | null {
   if (value instanceof Timestamp) return value.toDate().toISOString();
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
   if (typeof value === "string" || typeof value === "number") {
@@ -19,20 +19,26 @@ function toIso(value: unknown): string | null {
   return null;
 }
 
+// 'YYYY-MM-DD' → 'YYYYMMDD'（workshiftGroups のドキュメントID）。
+export function dayId(day: string): string {
+  return day.replace(/-/g, "");
+}
+
 /**
- * 本番Firestoreから対象ウィンドウ内の予約を読み取る（読み取り専用）。
- * roomType 等のフィルタは複合インデックスを避けるためクライアント側で適用する。
- * コレクション名・フィールド名は設定で差し替え可能（本番スキーマ確定後に環境変数で調整）。
+ * 対象営業日のグループ配下 reservations を直接読み取る（読み取り専用）。
+ * 予約は workshiftGroups/{YYYYMMDD}/reservations に日付ごとに格納されるため、
+ * コレクショングループ横断＋範囲検索（＝要インデックス）を避けて該当グループだけ読む。
+ * rsvStatus 等のフィルタはインデックス不要にするためクライアント側で適用する。
  */
 export async function readReservations(
   sourceDb: Firestore,
   source: ReservationSourceConfig,
-  window: { start: Date; end: Date },
+  day: string,
 ): Promise<ReservationEntry[]> {
   const snapshot = await sourceDb
-    .collectionGroup(source.collectionGroup)
-    .where(source.dateField, ">=", Timestamp.fromDate(window.start))
-    .where(source.dateField, "<", Timestamp.fromDate(window.end))
+    .collection(source.parentCollection)
+    .doc(dayId(day))
+    .collection(source.subCollection)
     .limit(source.maxDocuments)
     .get();
 

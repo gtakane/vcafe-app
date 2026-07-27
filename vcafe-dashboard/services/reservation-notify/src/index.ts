@@ -24,7 +24,7 @@ async function main() {
   const managementDb = getFirestore(managementApp);
 
   const [entries, mapping] = await Promise.all([
-    readReservations(productionDb, config.source, window),
+    readReservations(productionDb, config.source, window.day),
     loadMaidDiscordMapping(managementDb, config),
   ]);
   const groups = groupByMaid(entries);
