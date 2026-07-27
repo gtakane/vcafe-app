@@ -31,35 +31,44 @@ function printFields(data, indent) {
   for (const key of Object.keys(data).sort()) console.log(`${indent}${key}: ${preview(data[key])}`);
 }
 
-// 予約は workshiftGroups/{availabledate順} 配下の "reservations" サブコレクションに入る想定。
-// availabledate 降順で最新日を見て、reservations サブコレクションの有無と中身を検証する。
-const orderField = process.argv[3] || "availabledate";
-let snap;
-try {
-  snap = await db.collection(group).orderBy(orderField, "desc").limit(8).get();
-  console.log(`\n## collection("${group}").orderBy("${orderField}","desc") のサンプル（最大8件・サブコレクションも確認）`);
-} catch (error) {
-  console.log(`\n## "${orderField}" で並び替えできなかったため未ソートで表示: ${error.message}`);
-  snap = await db.collection(group).limit(8).get();
-}
+// 予約は workshiftGroups/{日付グループ} 配下の "reservations" サブコレクションに入る想定。
+// フィールド名を推測に頼らず、実フィールドを表示 → 日付系フィールドで降順ソート → reservations を検証する。
 
-if (snap.empty) {
-  console.log(`(0件) collection "${group}" が見つかりません。名前を引数で指定して再実行してください。`);
-} else {
-  for (const [i, doc] of snap.docs.entries()) {
-    const data = doc.data();
-    console.log(`\n[${i + 1}] path=${doc.ref.path}  ${orderField}=${preview(data[orderField])}`);
-    printFields(data, "    ");
-    const subs = await doc.ref.listCollections();
-    console.log(`    (subcollections: ${subs.map((c) => c.id).join(", ") || "なし"})`);
-    for (const sub of subs) {
-      const subSnap = await sub.limit(3).get();
-      console.log(`    └ "${sub.id}" のサンプル(${subSnap.size}件):`);
-      subSnap.docs.forEach((sd, j) => {
-        console.log(`      (${j + 1}) path=${sd.ref.path}`);
-        printFields(sd.data(), "        ");
-      });
-    }
+// 1) 実際のフィールド名を1件から確認する。
+const first = await db.collection(group).limit(1).get();
+if (first.empty) {
+  console.log(`\n(0件) collection "${group}" にドキュメントがありません。名前を引数で指定して再実行してください。`);
+  process.exit(0);
+}
+const sampleKeys = Object.keys(first.docs[0].data());
+console.log(`\n## "${group}" のフィールド名（1件目）: ${sampleKeys.join(", ")}`);
+
+// 2) 並び替えフィールドを決める（引数優先→日付らしいキーを自動検出）。
+const candidates = [process.argv[3], ...sampleKeys.filter((k) => /date|day|time|available/i.test(k))].filter(Boolean);
+let snap = null;
+let orderField = null;
+for (const field of candidates) {
+  try {
+    const s = await db.collection(group).orderBy(field, "desc").limit(8).get();
+    if (!s.empty) { snap = s; orderField = field; break; }
+  } catch { /* そのフィールドでは並び替え不可。次を試す */ }
+}
+if (!snap) { snap = await db.collection(group).limit(8).get(); orderField = "(未ソート)"; }
+console.log(`## 並び替え: ${orderField} 降順（最大8件・reservations 等サブコレクションを確認）`);
+
+for (const [i, doc] of snap.docs.entries()) {
+  const data = doc.data();
+  console.log(`\n[${i + 1}] path=${doc.ref.path}  ${orderField}=${preview(data[orderField])}`);
+  printFields(data, "    ");
+  const subs = await doc.ref.listCollections();
+  console.log(`    (subcollections: ${subs.map((c) => c.id).join(", ") || "なし"})`);
+  for (const sub of subs) {
+    const subSnap = await sub.limit(3).get();
+    console.log(`    └ "${sub.id}" のサンプル(${subSnap.size}件):`);
+    subSnap.docs.forEach((sd, j) => {
+      console.log(`      (${j + 1}) path=${sd.ref.path}`);
+      printFields(sd.data(), "        ");
+    });
   }
 }
 process.exit(0);
