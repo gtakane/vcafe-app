@@ -2,7 +2,7 @@ import { BigQuery } from "@google-cloud/bigquery";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { loadSyncConfig } from "./config.ts";
-import { buildMaidMap, mapCheki, mapMaidProfile, mapMonthlyReport, mapShift, mapUser, mapVisit, type SourceDocument } from "./transform.ts";
+import { buildMaidMap, mapCheki, mapMaidProfile, mapMonthlyReport, mapPayment, mapPurchase, mapShift, mapUser, mapVisit, type SourceDocument } from "./transform.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
 process.on("unhandledRejection", (error) => {
@@ -26,6 +26,21 @@ async function readGroup(group: string, dateField: string, start: Date, end: Dat
   return snapshots.docs.map((document): SourceDocument => ({
     id: document.id,
     parentId: document.ref.parent.parent?.id,
+    data: document.data(),
+    updatedAt: document.updateTime.toDate().toISOString(),
+  }));
+}
+
+// トップレベルコレクションを日付範囲で読む。単一フィールドの自動インデックスで動くため
+// collectionGroup と違い追加のインデックス作成が不要。
+async function readCollection(name: string, dateField: string, start: Date, end: Date) {
+  const snapshots = await sourceDb.collection(name)
+    .where(dateField, ">=", Timestamp.fromDate(start))
+    .where(dateField, "<", Timestamp.fromDate(end))
+    .limit(config.maxDocuments)
+    .get();
+  return snapshots.docs.map((document): SourceDocument => ({
+    id: document.id,
     data: document.data(),
     updatedAt: document.updateTime.toDate().toISOString(),
   }));
@@ -63,10 +78,12 @@ async function insertRows(tableName: string, rows: Array<Record<string, unknown>
 
 // 指定した [start, end) の24時間窓を1回分同期する。
 async function syncWindow(start: Date, end: Date) {
-  const [visitDocuments, chekiDocuments, shiftDocuments] = await Promise.all([
+  const [visitDocuments, chekiDocuments, shiftDocuments, paymentDocuments, purchaseDocuments] = await Promise.all([
     readGroup("userRecordVisits", "enterDateTime", start, end),
     readGroup("userAlbum", "date", start, end),
     readGroup("workshifts", "openTime", start, end),
+    readCollection("payments", "requestDate", start, end),
+    readCollection("purchaseLog", "confirmPurchaseTime", start, end),
   ]);
   const userIds = [...new Set([...visitDocuments, ...chekiDocuments].map((document) => document.parentId).filter((id): id is string => Boolean(id)))];
   const userDocuments = await readUsers(userIds);
@@ -76,15 +93,21 @@ async function syncWindow(start: Date, end: Date) {
   const visits = visitDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapVisit(document, config.hmacSecret, maidMap)).filter((row): row is NonNullable<typeof row> => Boolean(row));
   const cheki = chekiDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapCheki(document, config.hmacSecret, maidMap, syncedAt)).filter((row): row is NonNullable<typeof row> => Boolean(row));
   const shifts = shiftDocuments.map(mapShift).filter((row): row is NonNullable<typeof row> => Boolean(row));
+  // 課金ログ: Webstore(円) と アプリ内課金(コイン) を payments_raw に統合して保持する。
+  const payments = [
+    ...paymentDocuments.map((document) => mapPayment(document, config.hmacSecret)),
+    ...purchaseDocuments.map((document) => mapPurchase(document, config.hmacSecret)),
+  ].filter((row): row is NonNullable<typeof row> => Boolean(row));
 
   await Promise.all([
     insertRows("customers_raw", customers.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: null }))),
     insertRows("visits_raw", visits.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: visitDocuments.find((document) => document.id === row.id)?.updatedAt || null }))),
     insertRows("cheki_raw", cheki),
     insertRows("shifts_raw", shifts.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: shiftDocuments.find((document) => document.id === row.id)?.updatedAt || null }))),
+    insertRows("payments_raw", payments.map((row) => ({ ...row, syncedAt }))),
   ]);
 
-  console.info(JSON.stringify({ dryRun: config.dryRun, window: { start: start.toISOString(), end: end.toISOString() }, counts: { customers: customers.length, visits: visits.length, cheki: cheki.length, shifts: shifts.length } }));
+  console.info(JSON.stringify({ dryRun: config.dryRun, window: { start: start.toISOString(), end: end.toISOString() }, counts: { customers: customers.length, visits: visits.length, cheki: cheki.length, shifts: shifts.length, payments: payments.length } }));
 }
 
 // maidWorkReport（メイド名簿＋月次実績）を全件スナップショット同期する。
@@ -105,9 +128,35 @@ async function syncMaidReports() {
   console.info(JSON.stringify({ maidReports: { profiles: profiles.length, monthly: monthly.length } }));
 }
 
+// users を全件スナップショット同期する（ユーザーDBを「来店のあった人」だけでなく全会員にする）。
+// 件数が多いためドキュメントID順にページングし、1000件ずつ挿入する。
+async function syncAllUsers() {
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+  let total = 0, skipped = 0;
+  for (;;) {
+    let query = sourceDb.collection("users").orderBy("__name__").limit(1000);
+    if (cursor) query = query.startAfter(cursor);
+    const snapshot = await query.get();
+    if (snapshot.empty) break;
+    const documents = snapshot.docs.map((document): SourceDocument => ({ id: document.id, data: document.data(), updatedAt: document.updateTime.toDate().toISOString() }));
+    const rows = documents.map((document) => mapUser(document, config.hmacSecret)).filter((row): row is NonNullable<typeof row> => Boolean(row));
+    skipped += documents.length - rows.length; // テストユーザーは除外済み
+    await insertRows("customers_raw", rows.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: null })));
+    total += rows.length;
+    cursor = snapshot.docs[snapshot.docs.length - 1];
+    if (snapshot.size < 1000) break;
+  }
+  console.info(JSON.stringify({ allUsers: { synced: total, excludedTestUsers: skipped } }));
+}
+
 // メイドレポートは実行ごとに1回だけ同期（SKIP_MAID_REPORTS=trueで無効化可）。
 if (process.env.SKIP_MAID_REPORTS !== "true") {
   await syncMaidReports();
+}
+
+// 全会員の同期（SYNC_ALL_USERS=true のときのみ）。初回およびユーザー属性を最新化したいときに使う。
+if (process.env.SYNC_ALL_USERS === "true") {
+  await syncAllUsers();
 }
 
 // バックフィル設定（いずれも無ければ通常の単一窓＝増分同期）:

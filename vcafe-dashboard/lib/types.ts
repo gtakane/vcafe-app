@@ -20,6 +20,38 @@ export interface Customer {
   name: string;
   rank: string;
   registeredAt: string | null;
+  // --- 以下は本番 users ドキュメント由来の付加情報（未同期環境では undefined/null）---
+  gender?: string | null; // "male" | "female" | その他
+  birthYear?: number | null; // birthdate[0]（年）
+  active?: boolean | null;
+  lastVisitAt?: string | null; // 最終ご帰宅日
+  lastPaymentAt?: string | null; // 最終課金日
+  lastPurchasedItemAt?: string | null; // 最終アイテム購入日
+  lastPresentAt?: string | null; // 最終プレゼント日
+  purchasedItemCoin?: number | null; // アイテム購入額（コイン）
+  purchasedItemRewardPoint?: number | null; // アイテム購入額（リワードP）
+  purchasedItemQuantity?: number | null; // アイテム購入数
+  presentAmount?: number | null; // プレゼント（アイテム使用）回数
+  coin?: number | null; // コイン残高
+  rewardPoint?: number | null; // リワードポイント残高
+  totalVisitAmount?: number | null; // 累計ご帰宅数（本番集計値）
+  consecutiveVisitDays?: number | null;
+  maxConsecutiveVisitDays?: number | null;
+  // 期間内の課金集計（payments + purchaseLog から算出。BigQuery接続時のみ）
+  paymentCount?: number | null;
+  paymentAmount?: number | null;
+}
+
+// 課金ログ（Stripe/Webstore = payments、アプリ内課金 = purchaseLog）を1件に正規化したもの。
+export interface PaymentRow {
+  id: string;
+  customerId: string;
+  at: string;
+  amount: number; // 円。アプリ内課金はコイン額を保持し amount は0
+  coin: number;
+  channel: "webstore" | "inapp";
+  productId: string;
+  status: string;
 }
 
 export interface Visit {

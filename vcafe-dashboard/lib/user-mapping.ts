@@ -31,10 +31,46 @@ export function firestoreTimestampToIso(value: unknown) {
   return null;
 }
 
+/** 数値フィールド。未設定は null（0と区別する）。 */
+function numberOrNull(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** birthdate は [年, 月, 日] の配列。年のみ利用する（年代分析用）。 */
+function birthYearOf(value: unknown): number | null {
+  if (!Array.isArray(value) || !value.length) return null;
+  const year = Number(value[0]);
+  return Number.isInteger(year) && year > 1900 && year < 2100 ? year : null;
+}
+
 export function mapFirestoreUser(documentId: string, source: Record<string, unknown>): Customer | null {
   if (USER_FIELD_MAP.testFlags.some((field) => flagIsTrue(source[field]))) return null;
   const registeredAt = firestoreTimestampToIso(source[USER_FIELD_MAP.registrationDate]);
   const name = String(source[USER_FIELD_MAP.nickname] ?? "").trim() || "名称未設定";
   const rank = String(source[USER_FIELD_MAP.rank] ?? "").trim() || "未設定";
-  return { id: documentId, name, rank, registeredAt };
+  const gender = String(source.gender ?? "").trim() || null;
+  return {
+    id: documentId,
+    name,
+    rank,
+    registeredAt,
+    gender,
+    birthYear: birthYearOf(source.birthdate),
+    active: typeof source.active === "boolean" ? source.active : null,
+    lastVisitAt: firestoreTimestampToIso(source.lastVisitDate),
+    lastPaymentAt: firestoreTimestampToIso(source.lastPaymentDate),
+    lastPurchasedItemAt: firestoreTimestampToIso(source.lastPurchasedItemDate),
+    lastPresentAt: firestoreTimestampToIso(source.lastPresentDate),
+    purchasedItemCoin: numberOrNull(source.purchasedItemAmountCoin),
+    purchasedItemRewardPoint: numberOrNull(source.purchasedItemAmountRewardPoint),
+    purchasedItemQuantity: numberOrNull(source.purchasedItemTotalQuantity),
+    presentAmount: numberOrNull(source.presentAmount),
+    coin: numberOrNull(source.coin),
+    rewardPoint: numberOrNull(source.rewardPoint),
+    totalVisitAmount: numberOrNull(source.visitAmount),
+    consecutiveVisitDays: numberOrNull(source.consecutiveVisitDays),
+    maxConsecutiveVisitDays: numberOrNull(source.maxConsecutiveVisitDays),
+  };
 }

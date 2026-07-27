@@ -142,6 +142,21 @@ export function customerRows(data: AnalyticsData) {
     const spend = visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0);
     return {
       ...customer,
+      // 表示・ソートを単純にするため、未同期(null/undefined)の数値は0、日付は空文字に正規化する。
+      gender: customer.gender ?? "",
+      birthYear: customer.birthYear ?? 0,
+      lastPaymentAt: customer.lastPaymentAt ?? "",
+      lastPurchasedItemAt: customer.lastPurchasedItemAt ?? "",
+      lastPresentAt: customer.lastPresentAt ?? "",
+      purchasedItemCoin: customer.purchasedItemCoin ?? 0,
+      purchasedItemQuantity: customer.purchasedItemQuantity ?? 0,
+      presentAmount: customer.presentAmount ?? 0,
+      coin: customer.coin ?? 0,
+      rewardPoint: customer.rewardPoint ?? 0,
+      totalVisitAmount: customer.totalVisitAmount ?? 0,
+      maxConsecutiveVisitDays: customer.maxConsecutiveVisitDays ?? 0,
+      paymentCount: customer.paymentCount ?? 0,
+      paymentAmount: customer.paymentAmount ?? 0,
       visits: visits.length,
       spend,
       paidVisits: visits.filter((v) => isPaid(v.type)).length,

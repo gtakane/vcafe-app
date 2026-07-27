@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildMaidMap, mapShift, mapUser, mapVisit, pseudonymizeCustomerId } from "../src/transform.ts";
+import { buildMaidMap, mapPayment, mapPurchase, mapShift, mapUser, mapVisit, pseudonymizeCustomerId } from "../src/transform.ts";
 
 const secret = "0123456789abcdef0123456789abcdef";
 const timestamp = (iso: string) => ({ toDate: () => new Date(iso) });
@@ -54,4 +54,35 @@ test("builds the maid lookup and maps actual shift timestamps", () => {
   const shift = mapShift(source);
   assert.equal(shift?.maidName, "こはる");
   assert.equal(shift?.actualStart, "2026-07-21T10:05:00.000Z");
+});
+
+test("mapPayment: Webstore課金を正規化する（author→仮名化ID・円）", () => {
+  const row = mapPayment({ id: "pay-1", data: {
+    author: "user-abc", paymentAmount: 840, productId: "gokitakuTicket01", itemId: "gokitaku30minutes",
+    store: "webstore", stripeStatus: "stripeSucceeded",
+    requestDate: { toDate: () => new Date("2026-05-21T10:18:51.660Z") },
+  } }, "secret-secret-secret-secret-1234")!;
+  assert.equal(row.at, "2026-05-21T10:18:51.660Z");
+  assert.equal(row.amount, 840);
+  assert.equal(row.coin, 0);
+  assert.equal(row.channel, "webstore");
+  assert.equal(row.status, "stripeSucceeded");
+  assert.notEqual(row.customerId, "user-abc"); // 仮名化されている
+});
+
+test("mapPurchase: アプリ内課金を正規化する（コイン数を保持）", () => {
+  const row = mapPurchase({ id: "buy-1", data: {
+    userId: "user-xyz", coinSendToChargeCoin: 500, coinVendorSendToChargeCoin: "google",
+    productId: "com.v.cafe.athome.500ac", platform: "Android", purchaseIsSuccessful: true,
+    confirmPurchaseTime: { toDate: () => new Date("2025-11-18T16:54:21.535Z") },
+  } }, "secret-secret-secret-secret-1234")!;
+  assert.equal(row.coin, 500);
+  assert.equal(row.amount, 0); // 円建て金額は保持していない
+  assert.equal(row.channel, "inapp");
+  assert.equal(row.status, "succeeded");
+});
+
+test("mapPayment/mapPurchase: 必須項目が欠けた行は除外する", () => {
+  assert.equal(mapPayment({ id: "x", data: { paymentAmount: 100 } }, "secret-secret-secret-secret-1234"), null);
+  assert.equal(mapPurchase({ id: "y", data: { userId: "u" } }, "secret-secret-secret-secret-1234"), null);
 });

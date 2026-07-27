@@ -34,12 +34,22 @@ export async function loadAnalyticsData(query: DataQuery): Promise<AnalyticsData
       ), selected_shifts AS (
         SELECT * FROM \`${projectId}.${dataset}.shifts_current\`
         WHERE ${businessDate("scheduledStart")} BETWEEN DATE(@startDate) AND DATE(@endDate) ${maidWhere}
+      ), customer_payments AS (
+        -- 期間内の課金（Webstore円 + アプリ内課金コイン）をユーザー単位に集計する。
+        SELECT customerId, COUNT(*) AS paymentCount, SUM(amount) AS paymentAmount
+        FROM \`${projectId}.${dataset}.payments_current\`
+        WHERE DATE(\`at\`, "Asia/Tokyo") BETWEEN DATE(@startDate) AND DATE(@endDate)
+        GROUP BY customerId
+      ), selected_customers AS (
+        SELECT c.*, COALESCE(p.paymentCount, 0) AS paymentCount, COALESCE(p.paymentAmount, 0) AS paymentAmount
+        FROM \`${projectId}.${dataset}.customers_current\` c
+        LEFT JOIN customer_payments p ON p.customerId = c.id
+        WHERE c.id IN (SELECT DISTINCT customerId FROM selected_visits)
       )
       SELECT 'maid' AS kind, TO_JSON_STRING(t) AS payload
       FROM \`${projectId}.${dataset}.maids_current\` t ${query.maidId ? "WHERE id = @maidId" : ""}
       UNION ALL
-      SELECT 'customer', TO_JSON_STRING(t) FROM \`${projectId}.${dataset}.customers_current\` t
-      WHERE id IN (SELECT DISTINCT customerId FROM selected_visits)
+      SELECT 'customer', TO_JSON_STRING(t) FROM selected_customers t
       UNION ALL SELECT 'visit', TO_JSON_STRING(t) FROM selected_visits t
       UNION ALL SELECT 'shift', TO_JSON_STRING(t) FROM selected_shifts t
     `,

@@ -82,6 +82,54 @@ export function mapShift(document: SourceDocument): ShiftRow | null {
   };
 }
 
+export interface PaymentRowOut {
+  id: string;
+  customerId: string;
+  at: string;
+  amount: number;
+  coin: number;
+  channel: string;
+  productId: string;
+  status: string;
+}
+
+// payments/{id} = Stripe/Webstore の課金ログ（author=ユーザーID、paymentAmount=円）。
+export function mapPayment(document: SourceDocument, secret: string): PaymentRowOut | null {
+  const author = String(document.data.author || "").trim();
+  const at = firestoreTimestampToIso(document.data.requestDate) || firestoreTimestampToIso(document.data.stripeEventDate);
+  if (!author || !at) return null;
+  return {
+    id: document.id,
+    customerId: pseudonymizeCustomerId(author, secret),
+    at,
+    amount: numberValue(document.data.paymentAmount),
+    coin: 0,
+    channel: "webstore",
+    productId: String(document.data.productId || document.data.itemId || ""),
+    status: String(document.data.stripeStatus || ""),
+  };
+}
+
+// purchaseLog/{id} = アプリ内課金ログ（userId、coinSendToChargeCoin=購入コイン数）。
+// 金額(円)は保持していないため amount は 0 とし、コイン数で把握する。
+export function mapPurchase(document: SourceDocument, secret: string): PaymentRowOut | null {
+  const userId = String(document.data.userId || "").trim();
+  const at = firestoreTimestampToIso(document.data.confirmPurchaseTime)
+    || firestoreTimestampToIso(document.data.chargeCoinSucceedTime)
+    || firestoreTimestampToIso(document.data.purchaseProcessingEndTime);
+  if (!userId || !at) return null;
+  return {
+    id: document.id,
+    customerId: pseudonymizeCustomerId(userId, secret),
+    at,
+    amount: 0,
+    coin: numberValue(document.data.coinSendToChargeCoin),
+    channel: "inapp",
+    productId: String(document.data.productId || ""),
+    status: document.data.purchaseIsSuccessful === true ? "succeeded" : String(document.data.purchaseFailedReason || "failed"),
+  };
+}
+
 export function buildMaidMap(shifts: SourceDocument[]) {
   const map = new Map<string, string>();
   shifts.forEach((document) => {

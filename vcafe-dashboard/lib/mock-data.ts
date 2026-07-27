@@ -9,15 +9,39 @@ export const maids: Maid[] = [
   { id: "maid-05", name: "もも", avatar: "も", status: "active" },
 ];
 
+// デモ用。本番同期時は users ドキュメント由来の値が入る。
+function mockCustomer(id: string, name: string, rank: string, registeredAt: string, gender: string, index: number): Customer {
+  return {
+    id, name, rank, registeredAt, gender,
+    birthYear: 1988 + index,
+    active: true,
+    lastVisitAt: `2026-07-${String(14 + (index % 8)).padStart(2, "0")}T12:00:00Z`,
+    lastPaymentAt: index % 3 === 2 ? null : `2026-07-${String(2 + index).padStart(2, "0")}T09:00:00Z`,
+    lastPurchasedItemAt: index % 2 === 0 ? `2026-06-${String(10 + index).padStart(2, "0")}T09:00:00Z` : null,
+    lastPresentAt: index % 4 === 0 ? `2026-07-${String(5 + index).padStart(2, "0")}T09:00:00Z` : null,
+    purchasedItemCoin: index * 300,
+    purchasedItemRewardPoint: index * 30,
+    purchasedItemQuantity: index,
+    presentAmount: index % 4 === 0 ? index : 0,
+    coin: 500 * ((index % 5) + 1),
+    rewardPoint: 100 * index,
+    totalVisitAmount: 20 + index * 3,
+    consecutiveVisitDays: (index % 3) + 1,
+    maxConsecutiveVisitDays: (index % 5) + 2,
+    paymentCount: index % 3 === 2 ? 0 : (index % 4) + 1,
+    paymentAmount: index % 3 === 2 ? 0 : 840 * ((index % 4) + 1),
+  };
+}
+
 export const customers: Customer[] = [
-  { id: "usr-001", name: "あおい", rank: "プラチナ", registeredAt: "2024-02-12" },
-  { id: "usr-002", name: "はる", rank: "ゴールド", registeredAt: "2024-08-03" },
-  { id: "usr-003", name: "ゆう", rank: "シルバー", registeredAt: "2025-01-18" },
-  { id: "usr-004", name: "そら", rank: "ゴールド", registeredAt: "2025-03-27" },
-  { id: "usr-005", name: "なつ", rank: "ブロンズ", registeredAt: "2025-10-05" },
-  { id: "usr-006", name: "れん", rank: "プラチナ", registeredAt: "2023-11-22" },
-  { id: "usr-007", name: "ひなた", rank: "シルバー", registeredAt: "2026-02-15" },
-  { id: "usr-008", name: "かい", rank: "ブロンズ", registeredAt: "2026-05-10" },
+  mockCustomer("usr-001", "あおい", "プラチナ", "2024-02-12", "female", 0),
+  mockCustomer("usr-002", "はる", "ゴールド", "2024-08-03", "male", 1),
+  mockCustomer("usr-003", "ゆう", "シルバー", "2025-01-18", "male", 2),
+  mockCustomer("usr-004", "そら", "ゴールド", "2025-03-27", "female", 3),
+  mockCustomer("usr-005", "なつ", "ブロンズ", "2025-10-05", "male", 4),
+  mockCustomer("usr-006", "れん", "プラチナ", "2023-11-22", "female", 5),
+  mockCustomer("usr-007", "ひなた", "シルバー", "2026-02-15", "male", 6),
+  mockCustomer("usr-008", "かい", "ブロンズ", "2026-05-10", "female", 7),
 ];
 
 function iso(day: number, hour: number, minute = 0) {

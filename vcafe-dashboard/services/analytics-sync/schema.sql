@@ -10,6 +10,48 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.customers_raw` (
 PARTITION BY DATE(syncedAt)
 CLUSTER BY id;
 
+-- users ドキュメント由来の付加情報（既存テーブルにも後から追加できるよう ADD COLUMN IF NOT EXISTS）。
+ALTER TABLE `PROJECT_ID.DATASET_ID.customers_raw`
+  ADD COLUMN IF NOT EXISTS gender STRING,
+  ADD COLUMN IF NOT EXISTS birthYear INT64,
+  ADD COLUMN IF NOT EXISTS active BOOL,
+  ADD COLUMN IF NOT EXISTS lastVisitAt TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS lastPaymentAt TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS lastPurchasedItemAt TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS lastPresentAt TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS purchasedItemCoin FLOAT64,
+  ADD COLUMN IF NOT EXISTS purchasedItemRewardPoint FLOAT64,
+  ADD COLUMN IF NOT EXISTS purchasedItemQuantity FLOAT64,
+  ADD COLUMN IF NOT EXISTS presentAmount FLOAT64,
+  ADD COLUMN IF NOT EXISTS coin FLOAT64,
+  ADD COLUMN IF NOT EXISTS rewardPoint FLOAT64,
+  ADD COLUMN IF NOT EXISTS totalVisitAmount FLOAT64,
+  ADD COLUMN IF NOT EXISTS consecutiveVisitDays FLOAT64,
+  ADD COLUMN IF NOT EXISTS maxConsecutiveVisitDays FLOAT64;
+
+-- 課金ログ: payments(Stripe/Webstore, amount=円) と purchaseLog(アプリ内課金, coin=コイン数) を統合。
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.payments_raw` (
+  id STRING NOT NULL,
+  customerId STRING NOT NULL,
+  `at` TIMESTAMP NOT NULL,
+  amount FLOAT64 NOT NULL,
+  coin FLOAT64 NOT NULL,
+  channel STRING NOT NULL,
+  productId STRING,
+  status STRING,
+  syncedAt TIMESTAMP NOT NULL
+)
+PARTITION BY DATE(`at`)
+CLUSTER BY customerId;
+
+CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.payments_current` AS
+SELECT * EXCEPT(row_number, syncedAt)
+FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY syncedAt DESC) AS row_number
+  FROM `PROJECT_ID.DATASET_ID.payments_raw`
+)
+WHERE row_number = 1;
+
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.visits_raw` (
   id STRING NOT NULL,
   `at` TIMESTAMP NOT NULL,
