@@ -16,14 +16,17 @@ npm test
 ```
 `src/core.ts`（対象営業日の算出・集約・DM本文・対応解決・冪等キー）はスキーマ非依存で純粋。
 
+## 予約データ（本番スキーマ・確認済み）
+`workshiftGroups/{YYYYMMDD}/reservations/{id}` に予約枠が入る。
+- `openTime`（Timestamp）= お給仕開始時刻
+- `maidId` / `maidNickname` = 担当メイド
+- `rsvStatus`（bool）= **true が「実際に予約が入った」枠**（false は空き枠→通知しない）
+- `rsvUserNickname` / `rsvUserId` = 予約したお客様（rsvStatus=true時）
+
+`cloudrun.env.yaml` は上記に合わせて設定済み。スキーマを再確認したい場合は
+`npm install && node inspect-reservations.mjs workshiftGroups availableDate` で確認できる。
+
 ## 有効化手順（Cloud Shell）
-1. **本番の予約スキーマを確認**（読み取りのみ）:
-   ```
-   cd services/reservation-notify && npm install
-   node inspect-reservations.mjs            # まず userRecordVisits を確認
-   node inspect-reservations.mjs reservations   # 予約専用コレクションがあれば名前を指定
-   ```
-   出力から「予約コレクション名／予約日時フィールド／担当メイドID・ニックネーム／(任意)顧客名」を確認し、`cloudrun.env.yaml` の `RESERVATION_*` を実値へ更新する。
 2. **メイド↔Discord対応**を用意（どちらか）:
    - 勤怠Botに各メイドが投稿済みなら `ATTENDANCE_FALLBACK=true` で自動解決。
    - もしくは管理用Firestoreの `maidDiscordMap` に `{ maidId?, nickname?, discordUserId }` を登録。
@@ -45,10 +48,11 @@ npm test
 | `DRY_RUN` | `true` | trueはログのみ。実送信は`false` |
 | `TARGET_OFFSET_DAYS` | `0` | 0=当日の営業日ぶんを通知 |
 | `SHOW_CUSTOMER` | `false` | DMにお客様名を含めるか |
-| `RESERVATION_COLLECTION_GROUP` | `userRecordVisits` | 予約のコレクション（collectionGroup） |
-| `RESERVATION_DATE_FIELD` | `enterDateTime` | 予約日時フィールド |
+| `RESERVATION_COLLECTION_GROUP` | `reservations` | 予約のコレクション（collectionGroup） |
+| `RESERVATION_DATE_FIELD` | `openTime` | お給仕開始時刻フィールド |
 | `RESERVATION_MAID_ID_FIELD` / `..._NICKNAME_FIELD` | `maidId` / `maidNickname` | 担当メイド |
-| `RESERVATION_FILTER_FIELD` / `..._VALUE` | `roomType` / `reservation` | 予約のみ抽出（不要なら空に） |
+| `RESERVATION_CUSTOMER_LABEL_FIELD` | `rsvUserNickname` | お客様名（SHOW_CUSTOMER=true時に表示） |
+| `RESERVATION_FILTER_FIELD` / `..._VALUE` | `rsvStatus` / `true` | 実際に予約成立した枠のみ抽出 |
 | `MAID_DISCORD_MAP_COLLECTION` | `maidDiscordMap` | 手動対応表 |
 | `ATTENDANCE_FALLBACK` | `true` | 勤怠Bot記録で補完 |
 
