@@ -31,11 +31,19 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role="roles/datastore.user" --condition=None --quiet
 
-# BotトークンのSecret読み取り権限。
-gcloud secrets add-iam-policy-binding "${BOT_TOKEN_SECRET}" \
-  --project="${PROJECT_ID}" \
-  --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
-  --role="roles/secretmanager.secretAccessor" --quiet
+# BotトークンのSecretがあれば読み取り権限を付与して注入する。
+# 無ければ DRY_RUN 検証用にトークン無しでデプロイする（実送信前にSecret作成が必要）。
+SECRET_FLAGS=()
+if gcloud secrets describe "${BOT_TOKEN_SECRET}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+  gcloud secrets add-iam-policy-binding "${BOT_TOKEN_SECRET}" \
+    --project="${PROJECT_ID}" \
+    --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
+    --role="roles/secretmanager.secretAccessor" --quiet
+  SECRET_FLAGS=(--set-secrets="DISCORD_BOT_TOKEN=${BOT_TOKEN_SECRET}:latest")
+else
+  echo "注意: Secret '${BOT_TOKEN_SECRET}' が見つかりません。DISCORD_BOT_TOKEN 無しでデプロイします。" >&2
+  echo "      DRY_RUN=true の検証は可能ですが、実送信(DRY_RUN=false)前に Secret 作成が必要です。" >&2
+fi
 
 gcloud run jobs deploy "${JOB_NAME}" \
   --source "${SCRIPT_DIR}" \
@@ -45,7 +53,7 @@ gcloud run jobs deploy "${JOB_NAME}" \
   --tasks=1 --parallelism=1 --max-retries=1 \
   --task-timeout=600s --cpu=1 --memory=512Mi \
   --env-vars-file="${SCRIPT_DIR}/cloudrun.env.yaml" \
-  --set-secrets="DISCORD_BOT_TOKEN=${BOT_TOKEN_SECRET}:latest" \
+  "${SECRET_FLAGS[@]}" \
   --quiet
 
 echo "Deployed job ${JOB_NAME} in ${REGION}（既定 DRY_RUN=true）。"
