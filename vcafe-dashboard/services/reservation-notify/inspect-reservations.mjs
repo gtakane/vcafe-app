@@ -27,15 +27,29 @@ console.log(`# project=${projectId}`);
 console.log("\n## トップレベルのコレクション一覧（予約コレクション名の当たりを付ける）");
 for (const col of await db.listCollections()) console.log(`- ${col.id}`);
 
-console.log(`\n## collectionGroup("${group}") のサンプル（最大5件・フィールド名確認）`);
-const snap = await db.collectionGroup(group).limit(5).get();
+function printFields(data, indent) {
+  for (const key of Object.keys(data).sort()) console.log(`${indent}${key}: ${preview(data[key])}`);
+}
+
+console.log(`\n## collectionGroup("${group}") のサンプル（最大3件・サブコレクションも1階層潜る）`);
+const snap = await db.collectionGroup(group).limit(3).get();
 if (snap.empty) {
-  console.log("(0件) 別のコレクション名を引数で指定して再実行してください。例: node inspect-reservations.mjs reservations");
+  console.log("(0件) 別のコレクション名を引数で指定して再実行してください。例: node inspect-reservations.mjs workshiftgroup");
 } else {
-  snap.docs.forEach((doc, i) => {
+  for (const [i, doc] of snap.docs.entries()) {
     console.log(`\n[${i + 1}] path=${doc.ref.path}`);
-    const data = doc.data();
-    for (const key of Object.keys(data).sort()) console.log(`    ${key}: ${preview(data[key])}`);
-  });
+    printFields(doc.data(), "    ");
+    const subs = await doc.ref.listCollections();
+    if (subs.length) console.log(`    (subcollections: ${subs.map((c) => c.id).join(", ")})`);
+    // サブコレクションの中身も少しだけ覗いて予約の在り処とフィールドを特定する。
+    for (const sub of subs) {
+      const subSnap = await sub.limit(2).get();
+      console.log(`\n    └ subcollection "${sub.id}" のサンプル(${subSnap.size}件):`);
+      subSnap.docs.forEach((sd, j) => {
+        console.log(`      (${j + 1}) path=${sd.ref.path}`);
+        printFields(sd.data(), "        ");
+      });
+    }
+  }
 }
 process.exit(0);
