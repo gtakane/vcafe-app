@@ -127,6 +127,13 @@ tbody tr:hover{background:#fdf7fc}
 .search{border:1px solid var(--line);border-radius:9px;color:var(--ink);font-size:11px;padding:8px 12px}
 .matrix th:not(:first-child),.matrix td:not(:first-child){text-align:center}
 .matrix td:not(:first-child):not(:last-child){color:var(--purple)}
+/* 横スクロールでも1列目（名前）を固定 */
+.freeze-col th:first-child,.freeze-col td:first-child{position:sticky;left:0;background:#fff;z-index:2}
+.freeze-col thead th:first-child{background:#faf4fa;z-index:4}
+.freeze-col tbody tr:hover td:first-child{background:#fdf7fc}
+/* 縦スクロールでも見出し行を固定 */
+.freeze-head thead th{position:sticky;top:0;background:#faf4fa;z-index:3}
+.table-scroll.tall{max-height:72vh}
 .late,.ok{border-radius:10px;padding:3px 8px;font-size:9px;font-weight:700}
 .late{background:#fdeaef;color:#cf5a76}
 .ok{background:#e9f8f1;color:#2f9a72}

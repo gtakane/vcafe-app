@@ -22,6 +22,20 @@ test("DAU は営業日ごとのユニークアクティブ数、平均とピー�
   assert.equal(result.activeUsers, 3);
 });
 
+test("WAU/MAU = 週次(月曜始まり)・月次のユニークアクティブの平均とピーク", () => {
+  const visits: GrowthVisitRow[] = [
+    { customerId: "u1", maidId: "m1", at: at("2026-07-01", 20), type: "paid" }, // 週A(06/29-07/05)
+    { customerId: "u2", maidId: "m1", at: at("2026-07-01", 21), type: "paid" }, // 週A
+    { customerId: "u3", maidId: "m1", at: at("2026-07-04", 20), type: "paid" }, // 週A
+    { customerId: "u4", maidId: "m1", at: at("2026-07-07", 20), type: "paid" }, // 週B(07/06-07/12)
+  ];
+  const result = computeGrowth("2026-07-01", "2026-07-12", [], visits, []);
+  assert.equal(result.peakWau, 3); // 週A: u1,u2,u3
+  assert.equal(result.avgWau, 2); // (3 + 1) / 2
+  assert.equal(result.avgMau, 4); // 7月ユニーク u1..u4
+  assert.equal(result.peakMau, 4);
+});
+
 test("深夜(0:00〜1:59)のご帰宅は前営業日に集計される", () => {
   const visits: GrowthVisitRow[] = [
     { customerId: "u1", maidId: "m1", at: at("2026-07-02", 1), type: "paid" }, // 07/02 01:00 → 営業日 07/01

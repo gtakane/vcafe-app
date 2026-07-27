@@ -2,6 +2,7 @@ import type { AnalyticsData, Granularity, Viewer, Visit } from "./types";
 import {
   businessDateJst,
   CHEKI_PRICE,
+  isPaid,
   shiftActualHours,
   shiftLateMinutes,
   weightedPaidCount,
@@ -138,11 +139,18 @@ export function customerRows(data: AnalyticsData) {
   return data.customers.map((customer) => {
     const visits = data.visits.filter((v) => v.customerId === customer.id).sort((a, b) => b.at.localeCompare(a.at));
     const favorite = data.maids.map((maid) => ({ name: maid.name, count: visits.filter((v) => v.maidId === maid.id).length })).sort((a, b) => b.count - a.count)[0];
+    const spend = visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0);
     return {
       ...customer,
       visits: visits.length,
-      spend: visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0),
+      spend,
+      paidVisits: visits.filter((v) => isPaid(v.type)).length,
+      reservations: visits.filter((v) => v.type === "reservation").length,
+      cheki: visits.reduce((sum, v) => sum + v.cheki, 0),
+      avgSpend: visits.length ? Math.round(spend / visits.length) : 0,
+      uniqueMaids: new Set(visits.map((v) => v.maidId)).size,
       favoriteMaid: favorite?.count ? favorite.name : "—",
+      firstVisit: visits.length ? visits[visits.length - 1].at.slice(0, 10) : "—",
       lastVisit: visits[0]?.at.slice(0, 10) || "—",
     };
   }).sort((a, b) => b.visits - a.visits);

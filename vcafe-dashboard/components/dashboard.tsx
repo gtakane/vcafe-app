@@ -131,20 +131,27 @@ function GrowthPanel({ growth, loading, error }: { growth: GrowthMetrics | null;
   if (!growth) return <section className="panel"><p className="muted">読込中…</p></section>;
   const dauPoints = growth.daily.map((d) => ({ label: d.label, visits: d.dau }));
   const defs: Array<{ term: string; body: string }> = [
-    { term: "DAU（平均 / ピーク）", body: "各営業日にご帰宅したユニークユーザー数。営業日は19:00〜翌2:00（0:00〜1:59は前日扱い）。平均は期間内の営業日平均、ピークは最大値。" },
+    { term: "DAU / WAU / MAU（平均・ピーク）", body: "各営業日／週（月曜始まり）／暦月にご帰宅したユニークユーザー数。営業日は19:00〜翌2:00（0:00〜1:59は前日扱い）。平均は期間内の各バケットの平均、ピークは最大値。" },
+    { term: "定着率（DAU/MAU）", body: "平均DAU ÷ 平均MAU。月内でどれだけ高頻度に再訪しているかの粘着度（高いほど毎日使われている）。" },
     { term: "新規登録者数", body: "選択期間内に会員登録（registrationDate）したユーザーの人数。" },
     { term: "新規課金転換率", body: "期間内の新規登録者のうち、期間内に1回以上の有料ご帰宅（予約を含む）をした人の割合。" },
     { term: "離脱率", body: "直前の同じ長さの期間にご帰宅があったユーザーのうち、当期間に一度もご帰宅しなかった人の割合。" },
     { term: "占有率 / 空席率", body: "同時に最大3名着席可・1枠20分のため、メイド1時間の稼働=最大9名分。全メイドの合計お給仕時間×9を最大利用可能枠とし、重み付きご帰宅数（滞在20分=1枠）が占める割合が占有率、空いている割合が空席率。" },
   ];
   return <>
+    <p className="eyebrow" style={{ margin: "14px 2px 2px" }}>ACTIVE USERS ・ アクティブユーザー</p>
+    <section className="metrics">
+      <Metric label="平均DAU" value={`${number.format(growth.avgDau)}名`} note={`ピーク ${number.format(growth.peakDau)}名／日`} tone="blue" />
+      <Metric label="平均WAU" value={`${number.format(growth.avgWau)}名`} note={`ピーク ${number.format(growth.peakWau)}名／週`} tone="purple" />
+      <Metric label="平均MAU" value={`${number.format(growth.avgMau)}名`} note={`ピーク ${number.format(growth.peakMau)}名／月`} tone="pink" />
+      <Metric label="定着率 DAU/MAU" value={pct(growth.stickiness)} note="毎日どれだけ再訪しているか" tone="orange" />
+    </section>
+    <p className="eyebrow" style={{ margin: "14px 2px 2px" }}>ACQUISITION & OCCUPANCY ・ 獲得 / 継続 / 座席</p>
     <section className="metrics">
       <Metric label="新規登録者数" value={`${number.format(growth.newRegistrations)}名`} note="期間内に会員登録" tone="pink" />
       <Metric label="新規課金転換率" value={pct(growth.newPaidConversionRate)} note={`${number.format(growth.newPaidConversions)}/${number.format(growth.newRegistrations)}名が有料化`} tone="purple" />
       <Metric label="離脱率" value={pct(growth.churnRate)} note={`前期${number.format(growth.prevActiveUsers)}名中${number.format(growth.churnedUsers)}名が未ご帰宅`} tone="orange" />
-      <Metric label="平均DAU" value={`${number.format(growth.avgDau)}名`} note={`ピーク ${number.format(growth.peakDau)}名`} tone="blue" />
-      <Metric label="占有率" value={pct(growth.occupancyRate)} note={`実利用 ${number.format(growth.occupiedSlots)}/${number.format(growth.capacitySlots)}枠`} tone="purple" />
-      <Metric label="空席率" value={pct(growth.vacancyRate)} note={`お給仕${number.format(Math.round(growth.workHours))}h × 最大9名分が上限`} tone="pink" />
+      <Metric label="空席率" value={pct(growth.vacancyRate)} note={`占有率 ${pct(growth.occupancyRate)}・お給仕${number.format(Math.round(growth.workHours))}h`} tone="blue" />
     </section>
     <section className="grid-2">
       <article className="panel"><div className="panel-head"><div><p className="eyebrow">DAILY ACTIVE USERS</p><h2>DAUの推移</h2></div><span className="badge">{loading ? "更新中" : "営業日"}</span></div><LineChart points={dauPoints} suffix="名" ariaLabel="DAUの推移" /></article>
@@ -215,6 +222,13 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
   const trend = buildTrend(data.visits, granularity);
   const maidStats = maidRows(data);
   const customerStats = customerRows(data);
+  // ご帰宅クロスは一度だけ集計する（ユーザー×メイド×訪問の総当たりを避ける）。
+  const crossCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    data.visits.forEach((v) => { const key = `${v.customerId}|${v.maidId}`; map.set(key, (map.get(key) || 0) + 1); });
+    return map;
+  }, [data.visits]);
+  const maxCross = Math.max(1, ...crossCounts.values());
   const knownRankOrder = ["プラチナ", "ゴールド", "シルバー", "ブロンズ", "未設定"];
   const visibleRanks = [...new Set(customerStats.map((customer) => customer.rank))].sort((a, b) => {
     const aIndex = knownRankOrder.indexOf(a); const bIndex = knownRankOrder.indexOf(b);
@@ -255,9 +269,9 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
 
       {view === "growth" && viewer.role === "admin" && <GrowthPanel growth={growth} loading={growthLoading} error={growthError} />}
 
-      {view === "users" && viewer.role === "admin" && <section className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">CUSTOMER DATABASE</p><h2>ユーザーデータベース</h2></div><input className="search" value={userQuery} onChange={(e)=>setUserQuery(e.target.value)} placeholder="⌕ ユーザーを検索" /></div><div className="table-scroll"><table><thead><tr><th>ユーザー名</th><th>ランク</th><th>登録日</th><th>ご帰宅</th><th>利用額</th><th>最推しメイド</th><th>最終ご帰宅</th></tr></thead><tbody>{visibleCustomers.map((u)=><tr key={u.id}><td><b>{u.name}</b><small className="id">{u.id}</small></td><td><span className={`text-rank ${u.rank}`}>{u.rank}</span></td><td>{jstDate(u.registeredAt)}</td><td>{u.visits}回</td><td>{yen.format(u.spend)}</td><td>{u.favoriteMaid}</td><td>{u.lastVisit}</td></tr>)}</tbody></table></div></section>}
+      {view === "users" && viewer.role === "admin" && <section className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">CUSTOMER DATABASE</p><h2>ユーザーデータベース</h2><small>{visibleCustomers.length}名・期間 {start}〜{end}</small></div><div style={{ display: "flex", gap: ".6rem", alignItems: "center" }}><input className="search" value={userQuery} onChange={(e)=>setUserQuery(e.target.value)} placeholder="⌕ ユーザーを検索" /><button className="secondary" disabled={!visibleCustomers.length} onClick={()=>downloadCsv(`users_${start}_${end}.csv`, [["ユーザー名","会員ID","ランク","登録日","ご帰宅","有料","予約","チェキ","利用額","平均単価","担当メイド数","最推しメイド","初ご帰宅","最終ご帰宅"], ...visibleCustomers.map((u)=>[u.name,u.id,u.rank,jstDate(u.registeredAt),u.visits,u.paidVisits,u.reservations,u.cheki,u.spend,u.avgSpend,u.uniqueMaids,u.favoriteMaid,u.firstVisit,u.lastVisit])])}>CSV出力</button></div></div><div className="table-scroll"><table className="freeze-col"><thead><tr><th>ユーザー名</th><th>ランク</th><th>登録日</th><th>ご帰宅</th><th>有料</th><th>予約</th><th>チェキ</th><th>利用額</th><th>平均単価</th><th>担当メイド</th><th>最推しメイド</th><th>初ご帰宅</th><th>最終ご帰宅</th></tr></thead><tbody>{visibleCustomers.map((u)=><tr key={u.id}><td><b>{u.name}</b><small className="id">{u.id}</small></td><td><span className={`text-rank ${u.rank}`}>{u.rank}</span></td><td>{jstDate(u.registeredAt)}</td><td>{u.visits}回</td><td>{u.paidVisits}回</td><td>{u.reservations}回</td><td>{u.cheki}枚</td><td>{yen.format(u.spend)}</td><td>{yen.format(u.avgSpend)}</td><td>{u.uniqueMaids}名</td><td>{u.favoriteMaid}</td><td>{u.firstVisit}</td><td>{u.lastVisit}</td></tr>)}</tbody></table></div></section>}
 
-      {view === "relations" && viewer.role === "admin" && <section className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">MAID × CUSTOMER</p><h2>ご帰宅クロス分析</h2></div></div><div className="table-scroll"><table className="matrix"><thead><tr><th>ユーザー</th>{data.maids.map((m)=><th key={m.id}>{m.name}</th>)}<th>合計</th></tr></thead><tbody>{customerStats.map((u)=><tr key={u.id}><td><b>{u.name}</b></td>{data.maids.map((m)=><td key={m.id}>{data.visits.filter((v)=>v.customerId===u.id&&v.maidId===m.id).length || "—"}</td>)}<td><b>{u.visits}</b></td></tr>)}</tbody></table></div></section>}
+      {view === "relations" && viewer.role === "admin" && <section className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">MAID × CUSTOMER</p><h2>ご帰宅クロス分析</h2><small>{customerStats.length}ユーザー × {data.maids.length}メイド・濃いセルほどご帰宅回数が多い（見出し行と1列目は固定）</small></div></div><div className="table-scroll tall"><table className="matrix freeze-col freeze-head"><thead><tr><th>ユーザー</th>{data.maids.map((m)=><th key={m.id}>{m.name}</th>)}<th>合計</th></tr></thead><tbody>{customerStats.map((u)=><tr key={u.id}><td><b>{u.name}</b></td>{data.maids.map((m)=>{const c=crossCounts.get(`${u.id}|${m.id}`)||0;return <td key={m.id} style={c?{background:`rgba(191,154,216,${(0.12+Math.min(c/maxCross,1)*0.55).toFixed(3)})`,color:"#4a3357",fontWeight:700}:undefined}>{c||"—"}</td>})}<td><b>{u.visits}</b></td></tr>)}</tbody></table></div></section>}
 
       {view === "attendance" && <><section className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">ATTENDANCE</p><h2>勤怠実績</h2></div></div><div className="table-scroll"><table><thead><tr><th>日付</th><th>メイド</th><th>予定</th><th>実績</th><th>実働</th><th>遅刻</th></tr></thead><tbody>{data.shifts.slice().reverse().slice(0,40).map((s)=>{const m=data.maids.find((x)=>x.id===s.maidId);const time=(value:string)=>new Date(value).toLocaleTimeString("ja-JP",{timeZone:"Asia/Tokyo",hour:"2-digit",minute:"2-digit"});const mins=s.actualStart?Math.max(0,(new Date(s.actualStart).getTime()-new Date(s.scheduledStart).getTime())/60000):0;const hrs=s.actualStart&&s.actualEnd?(new Date(s.actualEnd).getTime()-new Date(s.actualStart).getTime())/3600000:0;return <tr key={s.id}><td>{new Date(s.scheduledStart).toLocaleDateString("ja-JP",{timeZone:"Asia/Tokyo"})}</td><td><b>{m?.name}</b></td><td>{time(s.scheduledStart)}–{time(s.scheduledEnd)}</td><td>{s.actualStart?time(s.actualStart):"未打刻"}–{s.actualEnd?time(s.actualEnd):"未打刻"}</td><td>{hrs.toFixed(1)}h</td><td><span className={mins?"late":"ok"}>{mins?`${mins}分`:"定時"}</span></td></tr>})}</tbody></table></div></section>{viewer.role === "admin" && <section className="panel table-panel submissions-panel"><div className="panel-head"><div><p className="eyebrow">DISCORD SUBMISSIONS</p><h2>Discord勤怠申請</h2><small>確認用一覧・シフト本体への自動反映なし</small></div></div>{submissionError ? <p className="error">{submissionError}</p> : <div className="table-scroll"><table><thead><tr><th>対象日</th><th>種別</th><th>メイド</th><th>対象時間</th><th>理由・補足</th><th>受付日時</th></tr></thead><tbody>{submissions.map((s)=><tr key={s.id}><td>{s.targetDate || "—"}</td><td><b>{s.eventLabel}</b></td><td>{s.maidName}</td><td>{s.targetTime || "—"}</td><td>{s.reason || "—"}</td><td>{s.receivedAt ? new Date(s.receivedAt).toLocaleString("ja-JP",{timeZone:"Asia/Tokyo"}) : "—"}</td></tr>)}{submissions.length === 0 && <tr><td colSpan={6}>申請はまだありません</td></tr>}</tbody></table></div>}</section>}</>}
     </main>

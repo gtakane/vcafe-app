@@ -26,6 +26,11 @@ export interface GrowthMetrics {
   activeUsers: number; // 期間内ユニークアクティブユーザー
   avgDau: number; // 平均DAU（営業日あたり）
   peakDau: number; // ピークDAU
+  avgWau: number; // 平均WAU（週あたりユニーク、月〜日の週）
+  peakWau: number; // ピークWAU
+  avgMau: number; // 平均MAU（暦月あたりユニーク）
+  peakMau: number; // ピークMAU
+  stickiness: number; // 定着率 = 平均DAU / 平均MAU（0〜1）
   daily: GrowthDailyPoint[]; // DAU推移（営業日基準）
   newRegistrations: number; // 新規登録者数
   newPaidConversions: number; // 新規のうち有料ご帰宅に至った人数
@@ -93,6 +98,21 @@ function jstDate(iso: string): string {
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
 }
 
+// 営業日 'YYYY-MM-DD' が属する週（月曜始まり）の月曜日を返す。analytics.ts の週次バケットと一致。
+function weekKeyOf(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const offset = (dt.getUTCDay() + 6) % 7;
+  dt.setUTCDate(dt.getUTCDate() - offset);
+  return `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}-${pad2(dt.getUTCDate())}`;
+}
+
+function avgAndPeak(sets: Map<string, Set<string>>): { avg: number; peak: number } {
+  const counts = [...sets.values()].map((s) => s.size);
+  if (!counts.length) return { avg: 0, peak: 0 };
+  return { avg: Math.round(counts.reduce((a, b) => a + b, 0) / counts.length), peak: Math.max(...counts) };
+}
+
 function ensureSet<K>(map: Map<K, Set<string>>, key: K): Set<string> {
   let set = map.get(key);
   if (!set) { set = new Set(); map.set(key, set); }
@@ -114,6 +134,8 @@ export function computeGrowth(
   const currentActive = new Set<string>();
   const prevActive = new Set<string>();
   const dauByDay = new Map<string, Set<string>>();
+  const wauByWeek = new Map<string, Set<string>>();
+  const mauByMonth = new Map<string, Set<string>>();
   const payingCurrent = new Set<string>();
   let occupiedSlots = 0;
 
@@ -122,6 +144,8 @@ export function computeGrowth(
     if (bd >= start && bd <= end) {
       currentActive.add(visit.customerId);
       ensureSet(dauByDay, bd).add(visit.customerId);
+      ensureSet(wauByWeek, weekKeyOf(bd)).add(visit.customerId);
+      ensureSet(mauByMonth, bd.slice(0, 7)).add(visit.customerId);
       occupiedSlots += visit.weight ?? 1;
       if (isPaid(visit.type)) payingCurrent.add(visit.customerId);
     } else if (bd >= prevStart && bd <= prevEnd) {
@@ -135,6 +159,9 @@ export function computeGrowth(
   });
   const avgDau = daily.length ? Math.round(daily.reduce((sum, p) => sum + p.dau, 0) / daily.length) : 0;
   const peakDau = daily.reduce((max, p) => Math.max(max, p.dau), 0);
+  const { avg: avgWau, peak: peakWau } = avgAndPeak(wauByWeek);
+  const { avg: avgMau, peak: peakMau } = avgAndPeak(mauByMonth);
+  const stickiness = avgMau > 0 ? avgDau / avgMau : 0;
 
   const regInRange = registrations.filter((r) => r.registeredAt && jstDate(r.registeredAt) >= start && jstDate(r.registeredAt) <= end);
   const newRegistrations = regInRange.length;
@@ -159,7 +186,7 @@ export function computeGrowth(
   return {
     start, end, prevStart, prevEnd,
     activeUsers: currentActive.size,
-    avgDau, peakDau, daily,
+    avgDau, peakDau, avgWau, peakWau, avgMau, peakMau, stickiness, daily,
     newRegistrations, newPaidConversions, newPaidConversionRate,
     prevActiveUsers: prevActive.size, churnedUsers, churnRate,
     workHours, occupiedSlots, capacitySlots, occupancyRate, vacancyRate,
