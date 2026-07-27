@@ -37,11 +37,14 @@ function addDays(ymd: string, delta: number): string {
  * （lib/metrics.ts businessDateJst と整合：at-2h の日付が営業日）。
  * 00:00に実行して当日(offset=0)の予約お給仕を事前通知する用途を想定。
  */
-export function businessDayWindowJst(now: Date, offsetDays = 0): { day: string; start: Date; end: Date } {
-  const day = addDays(jstDateStr(now), offsetDays);
+export function windowForBusinessDay(day: string): { day: string; start: Date; end: Date } {
   const start = new Date(`${day}T02:00:00+09:00`);
   const end = new Date(start.getTime() + 24 * 3_600_000);
   return { day, start, end };
+}
+
+export function businessDayWindowJst(now: Date, offsetDays = 0): { day: string; start: Date; end: Date } {
+  return windowForBusinessDay(addDays(jstDateStr(now), offsetDays));
 }
 
 /** JSTの "HH:MM"。 */

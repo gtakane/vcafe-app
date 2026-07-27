@@ -4,7 +4,7 @@ import { Client, GatewayIntentBits } from "discord.js";
 import { loadNotifyConfig } from "./config.ts";
 import { readReservations } from "./reservations.ts";
 import { loadMaidDiscordMapping } from "./mapping.ts";
-import { businessDayWindowJst, formatMaidMessage, groupByMaid, notificationDocId, resolveDiscordId } from "./core.ts";
+import { businessDayWindowJst, formatMaidMessage, groupByMaid, notificationDocId, resolveDiscordId, windowForBusinessDay } from "./core.ts";
 
 process.on("unhandledRejection", (error) => {
   const err = error as { name?: string; message?: string };
@@ -14,7 +14,8 @@ process.on("unhandledRejection", (error) => {
 
 async function main() {
   const config = loadNotifyConfig(process.env);
-  const window = businessDayWindowJst(new Date(), config.targetOffsetDays);
+  // TARGET_DATE 指定時はその営業日、無ければ 今日+offset。
+  const window = config.targetDate ? windowForBusinessDay(config.targetDate) : businessDayWindowJst(new Date(), config.targetOffsetDays);
   console.info(`[reservation-notify] day=${window.day} window=${window.start.toISOString()}..${window.end.toISOString()} dryRun=${config.dryRun}`);
 
   // 本番は読み取り専用アプリ、管理用は書き込み用アプリとして分離する。

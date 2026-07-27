@@ -26,6 +26,7 @@ export interface NotifyConfig {
   mappingCollection: string;
   attendanceFallback: boolean;
   targetOffsetDays: number;
+  targetDate: string; // "YYYY-MM-DD" 指定時はこの営業日を対象（offsetより優先）。テスト/再送用。
   showCustomer: boolean;
   dryRun: boolean;
   notificationsCollection: string;
@@ -70,6 +71,11 @@ export function loadNotifyConfig(env: NodeJS.ProcessEnv): NotifyConfig {
     mappingCollection: env.MAID_DISCORD_MAP_COLLECTION?.trim() || "maidDiscordMap",
     attendanceFallback: boolEnv(env.ATTENDANCE_FALLBACK, true),
     targetOffsetDays: intEnv(env.TARGET_OFFSET_DAYS, 0, -7, 7, "TARGET_OFFSET_DAYS"),
+    targetDate: (() => {
+      const value = env.TARGET_DATE?.trim() || "";
+      if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error("TARGET_DATEはYYYY-MM-DD形式で指定してください");
+      return value;
+    })(),
     showCustomer: boolEnv(env.SHOW_CUSTOMER, false),
     dryRun,
     notificationsCollection: env.NOTIFICATIONS_COLLECTION?.trim() || "reservationNotifications",
