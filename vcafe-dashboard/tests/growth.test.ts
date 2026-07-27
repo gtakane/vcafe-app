@@ -67,21 +67,28 @@ test("離脱率 = 直前同期間はアクティブだが当期間に来なか�
   assert.equal(Number(result.churnRate.toFixed(4)), Number((2 / 3).toFixed(4)));
 });
 
-test("占有率 = シフト登録メイドのうちゲストが付いた割合、空席率はその補数", () => {
+test("空席率 = 合計お給仕時間×9(最大利用枠)に対する重み付きご帰宅数の空き割合", () => {
   const shifts: GrowthShiftRow[] = [
-    { maidId: "m1", at: at("2026-07-01", 19) },
-    { maidId: "m2", at: at("2026-07-01", 19) },
-    { maidId: "m3", at: at("2026-07-01", 19) },
-    { maidId: "m4", at: at("2026-07-01", 19) },
+    // m1 は 19:00〜21:00（2時間）お給仕 → 最大 2h × 9 = 18枠
+    { maidId: "m1", scheduledStart: at("2026-07-01", 19), scheduledEnd: at("2026-07-01", 21), actualStart: at("2026-07-01", 19), actualEnd: at("2026-07-01", 21) },
   ];
   const visits: GrowthVisitRow[] = [
-    { customerId: "u1", maidId: "m1", at: at("2026-07-01", 20), type: "paid" },
-    { customerId: "u2", maidId: "m2", at: at("2026-07-01", 21), type: "paid" },
-    { customerId: "u3", maidId: "m5", at: at("2026-07-01", 21), type: "paid" }, // シフト外のメイドは占有に数えない
+    { customerId: "u1", maidId: "m1", at: at("2026-07-01", 19), type: "paid", weight: 1 }, // 20分=1枠
+    { customerId: "u2", maidId: "m1", at: at("2026-07-01", 19), type: "paid", weight: 2 }, // 40分=2枠
+    { customerId: "u3", maidId: "m1", at: at("2026-07-01", 20), type: "reservation", weight: 3 }, // 予約も座席を占有
   ];
   const result = computeGrowth("2026-07-01", "2026-07-01", [], visits, shifts);
-  assert.equal(result.totalMaidDays, 4);
-  assert.equal(result.occupiedMaidDays, 2); // m1,m2
-  assert.equal(result.occupancyRate, 0.5);
-  assert.equal(result.vacancyRate, 0.5);
+  assert.equal(result.workHours, 2);
+  assert.equal(result.capacitySlots, 18);
+  assert.equal(result.occupiedSlots, 6); // 1+2+3
+  assert.equal(Number(result.occupancyRate.toFixed(4)), Number((6 / 18).toFixed(4)));
+  assert.equal(Number(result.vacancyRate.toFixed(4)), Number((12 / 18).toFixed(4)));
+});
+
+test("シフトが無い日は最大枠0のため占有率・空席率とも0", () => {
+  const visits: GrowthVisitRow[] = [{ customerId: "u1", maidId: "m1", at: at("2026-07-01", 20), type: "paid", weight: 1 }];
+  const result = computeGrowth("2026-07-01", "2026-07-01", [], visits, []);
+  assert.equal(result.capacitySlots, 0);
+  assert.equal(result.occupancyRate, 0);
+  assert.equal(result.vacancyRate, 0);
 });

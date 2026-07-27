@@ -135,7 +135,7 @@ function GrowthPanel({ growth, loading, error }: { growth: GrowthMetrics | null;
     { term: "新規登録者数", body: "選択期間内に会員登録（registrationDate）したユーザーの人数。" },
     { term: "新規課金転換率", body: "期間内の新規登録者のうち、期間内に1回以上の有料ご帰宅（予約を含む）をした人の割合。" },
     { term: "離脱率", body: "直前の同じ長さの期間にご帰宅があったユーザーのうち、当期間に一度もご帰宅しなかった人の割合。" },
-    { term: "占有率 / 空席率", body: "各営業日にシフトのあったメイド枠のうち、ゲストが付いた枠の割合が占有率、付かなかった割合が空席率（期間平均）。座席数データが連携されれば席ベースの定義に差し替え可能。" },
+    { term: "占有率 / 空席率", body: "同時に最大3名着席可・1枠20分のため、メイド1時間の稼働=最大9名分。全メイドの合計お給仕時間×9を最大利用可能枠とし、重み付きご帰宅数（滞在20分=1枠）が占める割合が占有率、空いている割合が空席率。" },
   ];
   return <>
     <section className="metrics">
@@ -143,8 +143,8 @@ function GrowthPanel({ growth, loading, error }: { growth: GrowthMetrics | null;
       <Metric label="新規課金転換率" value={pct(growth.newPaidConversionRate)} note={`${number.format(growth.newPaidConversions)}/${number.format(growth.newRegistrations)}名が有料化`} tone="purple" />
       <Metric label="離脱率" value={pct(growth.churnRate)} note={`前期${number.format(growth.prevActiveUsers)}名中${number.format(growth.churnedUsers)}名が未ご帰宅`} tone="orange" />
       <Metric label="平均DAU" value={`${number.format(growth.avgDau)}名`} note={`ピーク ${number.format(growth.peakDau)}名`} tone="blue" />
-      <Metric label="占有率" value={pct(growth.occupancyRate)} note="ゲストが付いたメイド枠" tone="purple" />
-      <Metric label="空席率" value={pct(growth.vacancyRate)} note="シフト有・ゲスト無の枠" tone="pink" />
+      <Metric label="占有率" value={pct(growth.occupancyRate)} note={`実利用 ${number.format(growth.occupiedSlots)}/${number.format(growth.capacitySlots)}枠`} tone="purple" />
+      <Metric label="空席率" value={pct(growth.vacancyRate)} note={`お給仕${number.format(Math.round(growth.workHours))}h × 最大9名分が上限`} tone="pink" />
     </section>
     <section className="grid-2">
       <article className="panel"><div className="panel-head"><div><p className="eyebrow">DAILY ACTIVE USERS</p><h2>DAUの推移</h2></div><span className="badge">{loading ? "更新中" : "営業日"}</span></div><LineChart points={dauPoints} suffix="名" ariaLabel="DAUの推移" /></article>

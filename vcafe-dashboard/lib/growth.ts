@@ -1,6 +1,12 @@
-import { businessDateJst, isPaid } from "./metrics.ts";
+import { businessDateJst, isPaid, shiftActualHours } from "./metrics.ts";
 import { mockAnalyticsData, customers as mockCustomers } from "./mock-data.ts";
 import type { Visit } from "./types";
+
+// 座席モデル: 同時に最大3名着席可、1枠=20分（重みの単位と一致）。
+// よってメイド1時間の稼働 = 3席 × 3枠/時 = 最大9名分の利用枠。
+export const SEATS_PER_MAID = 3;
+export const SLOTS_PER_HOUR = 3; // 60分 / 20分
+export const CAPACITY_PER_MAID_HOUR = SEATS_PER_MAID * SLOTS_PER_HOUR; // = 9
 
 // グロース指標（DAU・新規登録・新規課金転換率・離脱率・占有率/空席率）の算出。
 // すべて既存の同期データ（visits_current / customers_current / shifts_current）から導出でき、
@@ -27,8 +33,9 @@ export interface GrowthMetrics {
   prevActiveUsers: number; // 直前同期間のアクティブ
   churnedUsers: number; // 直前同期間はアクティブだが当期間に来なかった人数
   churnRate: number; // 離脱率 0〜1
-  occupiedMaidDays: number; // ゲストが付いたメイド枠（営業日×メイド）
-  totalMaidDays: number; // シフト登録のあったメイド枠（営業日×メイド）
+  workHours: number; // その期間にお給仕した全メイドの合計お給仕時間(h)
+  occupiedSlots: number; // 実際に利用されたユーザー枠（重み付きご帰宅数, 滞在20分=1枠）
+  capacitySlots: number; // 最大利用可能ユーザー枠 = 合計お給仕時間 × 9
   occupancyRate: number; // 占有率 0〜1
   vacancyRate: number; // 空席率 0〜1
 }
@@ -43,11 +50,15 @@ export interface GrowthVisitRow {
   maidId: string;
   at: string;
   type: Visit["type"];
+  weight?: number; // 滞在20分=1。省略時は1として扱う。
 }
 
 export interface GrowthShiftRow {
   maidId: string;
-  at: string; // scheduledStart（ISO）
+  scheduledStart: string;
+  scheduledEnd: string;
+  actualStart: string | null;
+  actualEnd: string | null;
 }
 
 const pad2 = (value: number) => String(value).padStart(2, "0");
@@ -103,15 +114,15 @@ export function computeGrowth(
   const currentActive = new Set<string>();
   const prevActive = new Set<string>();
   const dauByDay = new Map<string, Set<string>>();
-  const visitMaidsByDay = new Map<string, Set<string>>();
   const payingCurrent = new Set<string>();
+  let occupiedSlots = 0;
 
   for (const visit of visits) {
     const bd = businessDateJst(visit.at);
     if (bd >= start && bd <= end) {
       currentActive.add(visit.customerId);
       ensureSet(dauByDay, bd).add(visit.customerId);
-      ensureSet(visitMaidsByDay, bd).add(visit.maidId);
+      occupiedSlots += visit.weight ?? 1;
       if (isPaid(visit.type)) payingCurrent.add(visit.customerId);
     } else if (bd >= prevStart && bd <= prevEnd) {
       prevActive.add(visit.customerId);
@@ -134,21 +145,16 @@ export function computeGrowth(
   prevActive.forEach((id) => { if (!currentActive.has(id)) churnedUsers += 1; });
   const churnRate = prevActive.size ? churnedUsers / prevActive.size : 0;
 
-  const shiftMaidsByDay = new Map<string, Set<string>>();
+  // 最大利用可能枠 = 合計お給仕時間(h) × 9名/時。空席率 = 空き枠 ÷ 最大枠。
+  let workHours = 0;
   for (const shift of shifts) {
-    const bd = businessDateJst(shift.at);
+    const bd = businessDateJst(shift.scheduledStart);
     if (bd < start || bd > end) continue;
-    ensureSet(shiftMaidsByDay, bd).add(shift.maidId);
+    workHours += shiftActualHours(shift);
   }
-  let occupiedMaidDays = 0;
-  let totalMaidDays = 0;
-  for (const [day, onShift] of shiftMaidsByDay) {
-    totalMaidDays += onShift.size;
-    const served = visitMaidsByDay.get(day);
-    if (served) onShift.forEach((maidId) => { if (served.has(maidId)) occupiedMaidDays += 1; });
-  }
-  const occupancyRate = totalMaidDays ? occupiedMaidDays / totalMaidDays : 0;
-  const vacancyRate = totalMaidDays ? 1 - occupancyRate : 0;
+  const capacitySlots = workHours * CAPACITY_PER_MAID_HOUR;
+  const occupancyRate = capacitySlots > 0 ? occupiedSlots / capacitySlots : 0;
+  const vacancyRate = capacitySlots > 0 ? Math.max(0, 1 - occupancyRate) : 0;
 
   return {
     start, end, prevStart, prevEnd,
@@ -156,7 +162,7 @@ export function computeGrowth(
     avgDau, peakDau, daily,
     newRegistrations, newPaidConversions, newPaidConversionRate,
     prevActiveUsers: prevActive.size, churnedUsers, churnRate,
-    occupiedMaidDays, totalMaidDays, occupancyRate, vacancyRate,
+    workHours, occupiedSlots, capacitySlots, occupancyRate, vacancyRate,
   };
 }
 
@@ -169,8 +175,8 @@ function tsIso(value: unknown): string | null {
 
 function computeGrowthFromMock(start: string, end: string): GrowthMetrics {
   const registrations: GrowthRegistration[] = mockCustomers.map((c) => ({ id: c.id, registeredAt: c.registeredAt }));
-  const visits: GrowthVisitRow[] = mockAnalyticsData.visits.map((v) => ({ customerId: v.customerId, maidId: v.maidId, at: v.at, type: v.type }));
-  const shifts: GrowthShiftRow[] = mockAnalyticsData.shifts.map((s) => ({ maidId: s.maidId, at: s.scheduledStart }));
+  const visits: GrowthVisitRow[] = mockAnalyticsData.visits.map((v) => ({ customerId: v.customerId, maidId: v.maidId, at: v.at, type: v.type, weight: v.weight }));
+  const shifts: GrowthShiftRow[] = mockAnalyticsData.shifts.map((s) => ({ maidId: s.maidId, scheduledStart: s.scheduledStart, scheduledEnd: s.scheduledEnd, actualStart: s.actualStart, actualEnd: s.actualEnd }));
   return computeGrowth(start, end, registrations, visits, shifts);
 }
 
@@ -197,17 +203,17 @@ export async function loadGrowthData(query: { start: string; end: string }): Pro
   });
   const [visitRows] = await bigquery.query({
     location, params, maximumBytesBilled,
-    query: `SELECT customerId, maidId, \`at\`, type FROM \`${projectId}.${dataset}.visits_current\`
+    query: `SELECT customerId, maidId, \`at\`, type, weight FROM \`${projectId}.${dataset}.visits_current\`
             WHERE ${businessDate("`at`")} BETWEEN DATE(@prevStart) AND DATE(@end)`,
   });
   const [shiftRows] = await bigquery.query({
     location, params, maximumBytesBilled,
-    query: `SELECT maidId, scheduledStart FROM \`${projectId}.${dataset}.shifts_current\`
+    query: `SELECT maidId, scheduledStart, scheduledEnd, actualStart, actualEnd FROM \`${projectId}.${dataset}.shifts_current\`
             WHERE ${businessDate("scheduledStart")} BETWEEN DATE(@start) AND DATE(@end)`,
   });
 
   const registrations: GrowthRegistration[] = regRows.map((r) => ({ id: String(r.id), registeredAt: tsIso(r.registeredAt) }));
-  const visits: GrowthVisitRow[] = visitRows.map((r) => ({ customerId: String(r.customerId), maidId: String(r.maidId), at: tsIso(r.at) ?? "", type: String(r.type) as Visit["type"] })).filter((v) => v.at);
-  const shifts: GrowthShiftRow[] = shiftRows.map((r) => ({ maidId: String(r.maidId), at: tsIso(r.scheduledStart) ?? "" })).filter((s) => s.at);
+  const visits: GrowthVisitRow[] = visitRows.map((r) => ({ customerId: String(r.customerId), maidId: String(r.maidId), at: tsIso(r.at) ?? "", type: String(r.type) as Visit["type"], weight: Number(r.weight ?? 1) || 1 })).filter((v) => v.at);
+  const shifts: GrowthShiftRow[] = shiftRows.map((r) => ({ maidId: String(r.maidId), scheduledStart: tsIso(r.scheduledStart) ?? "", scheduledEnd: tsIso(r.scheduledEnd) ?? "", actualStart: tsIso(r.actualStart), actualEnd: tsIso(r.actualEnd) })).filter((s) => s.scheduledStart && s.scheduledEnd);
   return computeGrowth(start, end, registrations, visits, shifts);
 }
