@@ -1,5 +1,7 @@
 import type { AnalyticsData, MaidVisitLog, Visit } from "./types";
 import { businessDateJst, DEFAULT_INITIAL_TIME, FREE_TICKET_IDS, TICKET_PRICES } from "./metrics.ts";
+// 実接客時間の算出は metrics.ts（サーバー依存なしの共通ロジック）にある。
+export { mergedStayMinutes } from "./metrics.ts";
 
 // メイド個別のご帰宅明細（何日の何時に・誰が・何分・何のチケットで・コイン払いか・
 // チェキ有無・アイテムプレゼント有無）。

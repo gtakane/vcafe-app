@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildMaidVisitLogs, paymentLabel, ticketLabel, typeLabel } from "../lib/maid-visits.ts";
+import { buildMaidVisitLogs, mergedStayMinutes, paymentLabel, ticketLabel, typeLabel } from "../lib/maid-visits.ts";
 import type { Visit } from "../lib/types.ts";
 
 const maids = [{ id: "maid-01", name: "こはる" }];
@@ -81,4 +81,43 @@ test("buildMaidVisitLogs: 小数の滞在分は整数へ丸める（9.776 が 9,
   const [log] = buildMaidVisitLogs([visit({ minutes: 9.775766666666666, billedCoin: 0, billedRewardPoint: 310 })], maids, customers, []);
   assert.equal(log.minutes, 10);
   assert.equal(log.payment, "リワードポイント");
+});
+
+test("mergedStayMinutes: 同時間帯の重なりを除いた実接客時間を返す", () => {
+  // 3名が同じ20分に同席 → 延べ60分だが実時間は20分。
+  const same = [
+    { at: "2026-07-21T11:00:00Z", minutes: 20 },
+    { at: "2026-07-21T11:00:00Z", minutes: 20 },
+    { at: "2026-07-21T11:00:00Z", minutes: 20 },
+  ];
+  assert.equal(mergedStayMinutes(same), 20);
+
+  // 一部重なり: 11:00-11:20 と 11:10-11:50 → 11:00-11:50 の50分。
+  assert.equal(mergedStayMinutes([
+    { at: "2026-07-21T11:00:00Z", minutes: 20 },
+    { at: "2026-07-21T11:10:00Z", minutes: 40 },
+  ]), 50);
+
+  // 離れている場合は単純合計と一致する。
+  assert.equal(mergedStayMinutes([
+    { at: "2026-07-21T11:00:00Z", minutes: 20 },
+    { at: "2026-07-21T13:00:00Z", minutes: 20 },
+  ]), 40);
+});
+
+test("mergedStayMinutes: 空・不正値を安全に扱う", () => {
+  assert.equal(mergedStayMinutes([]), 0);
+  assert.equal(mergedStayMinutes([{ at: "not-a-date", minutes: 20 }]), 0);
+  assert.equal(mergedStayMinutes([{ at: "2026-07-21T11:00:00Z", minutes: 0 }]), 0);
+});
+
+test("mergedStayMinutes: 実接客は延べ滞在を超えない", () => {
+  const logs = buildMaidVisitLogs([
+    visit({ id: "a", at: "2026-07-21T11:00:00Z", minutes: 20 }),
+    visit({ id: "b", at: "2026-07-21T11:05:00Z", minutes: 20 }),
+    visit({ id: "c", at: "2026-07-21T11:10:00Z", minutes: 40 }),
+  ], maids, customers, []);
+  const sum = logs.reduce((acc, l) => acc + l.minutes, 0);
+  assert.ok(mergedStayMinutes(logs) <= sum);
+  assert.equal(mergedStayMinutes(logs), 50); // 11:00〜11:50
 });

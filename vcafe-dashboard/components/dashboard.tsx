@@ -5,7 +5,7 @@ import { buildTrend, customerRows, filterData, summarize } from "@/lib/analytics
 import type { AnalyticsData, AttendanceSubmission, Customer, Granularity, Maid, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Shift, Viewer } from "@/lib/types";
 import type { GrowthMetrics } from "@/lib/growth";
 // 座席定数はサーバー依存の無い metrics から取る（growth は BigQuery を読み込むため）。
-import { SEATS_PER_MAID } from "@/lib/metrics";
+import { mergedStayMinutes, SEATS_PER_MAID } from "@/lib/metrics";
 import LogoutButton from "@/components/logout-button";
 
 type View = "overview" | "maids" | "growth" | "users" | "relations" | "attendance";
@@ -200,22 +200,25 @@ function VisitLogTable({ logs, hideMaid, hideCustomer, onExport, exportName, ser
     minutes: acc.minutes + log.minutes, revenue: acc.revenue + log.revenue,
     cheki: acc.cheki + log.cheki, presents: acc.presents + log.presents,
   }), { minutes: 0, revenue: 0, cheki: 0, presents: 0 });
+  // 同時間帯の重なりを除いた実接客時間。お給仕時間と直接比較できる。
+  const mergedMinutes = mergedStayMinutes(logs);
   if (!logs.length) return <p className="muted">この期間のご帰宅がありません</p>;
   return <>
     <div className="log-summary">
       <span><b>{number.format(logs.length)}</b>件</span>
-      <span title={`ユーザーごとの滞在分の合計。同時に最大${SEATS_PER_MAID}名が着席できるため、実お給仕時間の最大${SEATS_PER_MAID}倍まで大きくなります`}>延べ滞在 <b>{number.format(totals.minutes)}</b>分</span>
+      <span title={`ユーザーごとの滞在分の単純合計。同時に最大${SEATS_PER_MAID}名が着席するため、実時間より大きくなります`}>延べ滞在 <b>{number.format(totals.minutes)}</b>分</span>
+      <span title={`同時間帯の重なりを除いた実際の接客時間。${SEATS_PER_MAID}名同席の20分は延べ60分でも実時間は20分`}>実接客 <b>{number.format(Math.round(mergedMinutes))}</b>分</span>
       {serveMinutes != null && serveMinutes > 0 && <>
         <span title="この期間の実お給仕時間（打刻ベース）">実お給仕 <b>{number.format(Math.round(serveMinutes))}</b>分</span>
-        {/* 延べ滞在 ÷ (実お給仕 × 席数) が席の埋まり具合。100%超は席数を超える計上＝データ異常のサイン。 */}
+        {/* 実接客(重なり除去済み)がお給仕時間を超えるのは物理的にあり得ない＝データ異常のサイン。 */}
         {(() => {
-          const occupancy = totals.minutes / (serveMinutes * SEATS_PER_MAID);
-          const over = occupancy > 1;
+          const rate = mergedMinutes / serveMinutes;
+          const over = rate > 1;
           return <span title={over
-            ? `延べ滞在が席数(${SEATS_PER_MAID}席)の上限を超えています。ご帰宅の重複計上か、打刻漏れの可能性があります`
-            : `席の埋まり具合。延べ滞在 ÷ (実お給仕 × ${SEATS_PER_MAID}席)`}
+            ? "重なりを除いた実接客時間がお給仕時間を超えています。ご帰宅の重複計上か打刻漏れの可能性があります"
+            : "お給仕時間のうち、実際にユーザーが着席していた割合"}
             style={over ? { color: "#d6336c", fontWeight: 600 } : undefined}>
-            席占有率 <b>{(occupancy * 100).toFixed(1)}%</b>{over ? " ⚠ 要確認" : ""}
+            稼働率 <b>{(rate * 100).toFixed(1)}%</b>{over ? " ⚠ 要確認" : ""}
           </span>;
         })()}
       </>}

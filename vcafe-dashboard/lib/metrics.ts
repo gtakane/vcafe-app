@@ -97,3 +97,39 @@ export function weightedVisitCount(visits: Visit[]): number {
 export function weightedPaidCount(visits: Visit[]): number {
   return visits.reduce((sum, v) => sum + (isPaid(v.type) ? v.weight ?? 1 : 0), 0);
 }
+
+/**
+ * 重なりを除いた実接客時間（分）。
+ *
+ * 同時に最大3名が着席できるため、ユーザーごとの滞在分を単純に足した「延べ滞在」は
+ * 実際の経過時間より大きくなる（3名同席の20分は延べ60分だが実時間は20分）。
+ * ご帰宅を [開始, 終了) の区間とみなして重なりを結合し、実際に接客していた時間を返す。
+ * この値はお給仕時間と直接比較でき、これを超えるなら重複計上か打刻漏れを疑える。
+ */
+export function mergedStayMinutes(logs: Array<{ at: string; minutes: number }>): number {
+  const intervals = logs
+    .map((log) => {
+      const start = new Date(log.at).getTime();
+      const minutes = Number(log.minutes);
+      return { start, end: start + (Number.isFinite(minutes) ? Math.max(0, minutes) : 0) * 60000 };
+    })
+    .filter((i) => Number.isFinite(i.start) && i.end > i.start)
+    .sort((a, b) => a.start - b.start);
+
+  let total = 0;
+  let currentStart = 0;
+  let currentEnd = 0;
+  for (const interval of intervals) {
+    if (currentEnd === 0) { currentStart = interval.start; currentEnd = interval.end; continue; }
+    if (interval.start <= currentEnd) {
+      // 重なっている（または隣接）ので現在の区間を伸ばす。
+      currentEnd = Math.max(currentEnd, interval.end);
+    } else {
+      total += currentEnd - currentStart;
+      currentStart = interval.start;
+      currentEnd = interval.end;
+    }
+  }
+  if (currentEnd > currentStart) total += currentEnd - currentStart;
+  return total / 60000;
+}
