@@ -12,16 +12,25 @@ PROJECT_ID="${PROJECT_ID:-vcafe-admin-analytics}"
 LOCATION="${BIGQUERY_LOCATION:-asia-northeast1}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# 後片付けは1つの trap にまとめる。EXIT の trap は上書きされるため、
+# 一時データセットの削除と一時ファイルの削除を別々に仕掛けてはいけない。
+ACTUAL_FILE="$(mktemp)"
+TEMP_DS=""
+cleanup() {
+  rm -f "${ACTUAL_FILE}"
+  if [[ -n "${TEMP_DS}" ]]; then
+    echo "# 一時データセット ${TEMP_DS} を削除します"
+    bq --project_id="${PROJECT_ID}" rm -r -f -d "${PROJECT_ID}:${TEMP_DS}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
 if [[ "${TEMP_DATASET:-false}" == "true" ]]; then
   DS="schema_check_$(date -u +%Y%m%d%H%M%S)_$RANDOM"
   echo "# 一時データセット ${DS} を作成して schema.sql を適用します"
   bq --project_id="${PROJECT_ID}" --location="${LOCATION}" mk --dataset \
     --default_table_expiration=3600 "${PROJECT_ID}:${DS}" >/dev/null
-  cleanup() {
-    echo "# 一時データセット ${DS} を削除します"
-    bq --project_id="${PROJECT_ID}" rm -r -f -d "${PROJECT_ID}:${DS}" >/dev/null 2>&1 || true
-  }
-  trap cleanup EXIT
+  TEMP_DS="${DS}"
   BIGQUERY_DATASET="${DS}" bash "${SCRIPT_DIR}/apply-schema.sh" >/dev/null || {
     echo "★ schema.sql の適用に失敗しました" >&2; exit 1;
   }
@@ -32,47 +41,23 @@ fi
 
 echo "# project=${PROJECT_ID} dataset=${DS}"
 
-ACTUAL="$(bq --project_id="${PROJECT_ID}" query --use_legacy_sql=false --format=csv \
+# --location は必須。省略すると既定ロケーション(US)で探しに行き、
+# asia-northeast1 のデータセットが「見つからない」扱いになる。
+ACTUAL="$(bq --project_id="${PROJECT_ID}" --location="${LOCATION}" query --use_legacy_sql=false --format=csv \
   "SELECT table_name, column_name FROM \`${PROJECT_ID}.${DS}.INFORMATION_SCHEMA.COLUMNS\` ORDER BY table_name, column_name" 2>/dev/null | tail -n +2)"
 
 if [[ -z "${ACTUAL}" ]]; then
-  echo "★ INFORMATION_SCHEMA を取得できませんでした" >&2
+  echo "★ INFORMATION_SCHEMA を取得できませんでした（project=${PROJECT_ID} dataset=${DS} location=${LOCATION}）" >&2
+  echo "  データセット名・ロケーション・権限を確認してください。" >&2
   exit 1
 fi
 
-echo "${ACTUAL}" | python3 - "${SCRIPT_DIR}/src/schema-manifest.json" <<'PY'
-import json, sys, collections
+# 比較はファイル経由で渡す。`python3 - <<'PY'` はヒアドキュメントが標準入力を
+# 占有するため、パイプで渡したデータは届かない（全テーブルを「存在しない」と
+# 誤報告していた原因）。比較処理は scripts/compare-schema.py にありテスト済み。
+printf '%s\n' "${ACTUAL}" > "${ACTUAL_FILE}"
 
-manifest = json.load(open(sys.argv[1]))["tables"]
-actual = collections.defaultdict(set)
-for line in sys.stdin.read().splitlines():
-    if not line.strip():
-        continue
-    table, column = line.split(",", 1)
-    actual[table.strip()].add(column.strip())
-
-problems = []
-for table, columns in manifest.items():
-    expected = set(columns)
-    if table not in actual:
-        # ビューは manifest に含めないため、テーブルのみを対象にする。
-        problems.append(f"{table}: BigQuery に存在しない（schema.sql 未適用の可能性）")
-        continue
-    missing = expected - actual[table]
-    extra = actual[table] - expected
-    if missing:
-        problems.append(f"{table}: BigQuery に無い列 {sorted(missing)}（schema.sql を適用してください）")
-    if extra:
-        problems.append(f"{table}: manifest に無い列 {sorted(extra)}（npm run schema:manifest で再生成、または不要列を確認）")
-
-print(f"照合したテーブル: {len(manifest)}")
-if problems:
-    print(f"\n★ 差分 {len(problems)} 件:")
-    for p in problems:
-        print(f"  - {p}")
-    sys.exit(1)
-print("manifest と BigQuery のスキーマは一致しています。")
-PY
+python3 "${SCRIPT_DIR}/scripts/compare-schema.py" "${SCRIPT_DIR}/src/schema-manifest.json" "${ACTUAL_FILE}"
 STATUS=$?
 
 echo
