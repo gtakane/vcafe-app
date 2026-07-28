@@ -132,6 +132,57 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.maid_monthly_raw` (
 )
 CLUSTER BY maidId, month;
 
+
+-- ============================================================================
+-- 可観測性: 同期実行の記録。UIの「最終同期」はここの watermark を使う
+-- （data-source.ts の generatedAt は API 応答時刻であり同期時刻ではない）。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.sync_runs` (
+  runId STRING NOT NULL,
+  source STRING NOT NULL,
+  windowKind STRING,                 -- incremental / rescan / backfill
+  windowStart TIMESTAMP,
+  windowEnd TIMESTAMP,
+  readCount INT64,
+  acceptedCount INT64,
+  rejectedCount INT64,
+  insertedCount INT64,
+  maxEventAt TIMESTAMP,              -- 取り込めたイベント時刻の最大値
+  maxSourceUpdatedAt TIMESTAMP,      -- 取り込めた更新時刻の最大値（履歴修正の追跡用）
+  limitReached BOOL,
+  status STRING NOT NULL,            -- ok / degraded / failed
+  errorCode STRING,
+  startedAt TIMESTAMP NOT NULL,
+  completedAt TIMESTAMP
+)
+PARTITION BY DATE(startedAt)
+CLUSTER BY source, status;
+
+-- 変換で落ちた行の記録。生データ・UID・ニックネームは保存しない。
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.sync_rejects` (
+  runId STRING NOT NULL,
+  source STRING NOT NULL,
+  reasonCode STRING NOT NULL,
+  fieldNames STRING,                 -- 欠損・不正だった項目名（値は含めない）
+  hashedPath STRING,                 -- recordKey と同じ HMAC。生パスではない
+  rejectedAt TIMESTAMP NOT NULL
+)
+PARTITION BY DATE(rejectedAt)
+CLUSTER BY source, reasonCode;
+
+-- データ品質チェックの結果。診断スクリプトをここへ集約していく。
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.dq_results` (
+  runId STRING,
+  checkName STRING NOT NULL,
+  status STRING NOT NULL,            -- pass / warn / fail
+  observedValue FLOAT64,
+  threshold FLOAT64,
+  details STRING,
+  checkedAt TIMESTAMP NOT NULL
+)
+PARTITION BY DATE(checkedAt)
+CLUSTER BY checkName, status;
+
 -- ==========================================================================
 -- 2) 追加列
 -- ==========================================================================
@@ -336,3 +387,15 @@ SELECT v.* EXCEPT(cheki, daily_row), IF(v.daily_row = 1, COALESCE(c.cheki_count,
 FROM numbered_visits v
 LEFT JOIN cheki_daily c
   ON c.customerId = v.customerId AND c.maidId = v.maidId AND c.business_date = DATE(TIMESTAMP_SUB(v.`at`, INTERVAL 2 HOUR), "Asia/Tokyo");
+
+-- 同期の鮮度。UIの「最終同期」表示に使う。
+CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.sync_watermark` AS
+SELECT
+  MAX(completedAt) AS lastSyncedAt,
+  MAX(maxEventAt) AS lastEventAt,
+  MAX(maxSourceUpdatedAt) AS lastSourceUpdatedAt,
+  -- 直近の実行が失敗/劣化していれば画面にも出せるようにする。
+  ARRAY_AGG(status ORDER BY startedAt DESC LIMIT 1)[OFFSET(0)] AS lastStatus,
+  TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(completedAt), MINUTE) AS freshnessLagMinutes
+FROM `PROJECT_ID.DATASET_ID.sync_runs`
+WHERE status != 'failed';

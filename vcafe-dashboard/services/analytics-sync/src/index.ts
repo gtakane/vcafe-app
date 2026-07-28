@@ -3,6 +3,7 @@ import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { loadSyncConfig } from "./config.ts";
 import { fetchAllPages, type PageCursor } from "./paging.ts";
+import { buildSyncWindows } from "./windows.ts";
 import { buildMaidDirectory, mapCheki, pseudonymizeCustomerId, recordKeyOf, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
@@ -144,8 +145,58 @@ function countRejects(readCount: number, acceptedCount: number, source: string, 
   return rejected;
 }
 
+/** 実行記録。監視・鮮度表示の根拠になるため、失敗した窓についても必ず1行残す。 */
+interface SyncRunRow {
+  runId: string;
+  source: string;
+  windowKind: string;
+  windowStart: string;
+  windowEnd: string;
+  readCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  insertedCount: number;
+  maxEventAt: string | null;
+  maxSourceUpdatedAt: string | null;
+  limitReached: boolean;
+  status: "ok" | "degraded" | "failed";
+  errorCode: string | null;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+const maxOf = (values: Array<string | null | undefined>): string | null => {
+  const valid = values.filter((v): v is string => Boolean(v)).sort();
+  return valid.length ? valid[valid.length - 1] : null;
+};
+
+async function recordRuns(rows: SyncRunRow[]) {
+  if (!rows.length) return;
+  try {
+    await insertRows("sync_runs", rows);
+  } catch (error) {
+    // 記録の失敗で同期本体を止めない。ただし気づけるようログには必ず残す。
+    console.error(`SYNC_RUNS_INSERT_FAILED ${(error as Error).message}`);
+  }
+}
+
+async function recordRejects(runId: string, entries: Array<{ source: string; reasonCode: string; count: number }>) {
+  const rows = entries.filter((entry) => entry.count > 0).map((entry) => ({
+    runId, source: entry.source, reasonCode: entry.reasonCode,
+    // 生データ・UID・ニックネームは保存しない。件数と理由だけを残す。
+    fieldNames: null, hashedPath: null, rejectedAt: new Date().toISOString(),
+  }));
+  if (!rows.length) return;
+  try {
+    await insertRows("sync_rejects", rows);
+  } catch (error) {
+    console.error(`SYNC_REJECTS_INSERT_FAILED ${(error as Error).message}`);
+  }
+}
+
 // 指定した [start, end) の24時間窓を1回分同期する。
-async function syncWindow(start: Date, end: Date): Promise<{ degraded: Array<{ source: string; reasonCode: string; message: string }> }> {
+async function syncWindow(start: Date, end: Date, windowKind = "incremental"): Promise<{ degraded: Array<{ source: string; reasonCode: string; message: string }> }> {
+  const startedAt = new Date().toISOString();
   // 必須ソース: 失敗したら窓ごと失敗させる（欠けたまま成功にしない）。
   const [visitsRead, chekiRead, shiftsRead, paymentsRead, purchaseRead] = await Promise.all([
     readGroup("userRecordVisits", "enterDateTime", start, end),
@@ -235,6 +286,40 @@ async function syncWindow(start: Date, end: Date): Promise<{ degraded: Array<{ s
     shifts: countRejects(shiftDocuments.length, shifts.length, "workshifts", "UNRESOLVED_MAID_OR_INVALID"),
     presents: countRejects(presentDocuments.length, presents.length, "userRecordPresents", "UNRESOLVED_MAID_OR_INVALID"),
   };
+  const completedAt = new Date().toISOString();
+  const runStatus: SyncRunRow["status"] = degraded.length ? "degraded" : "ok";
+  await recordRuns([
+    { runId, source: "userRecordVisits", windowKind, windowStart: start.toISOString(), windowEnd: end.toISOString(),
+      readCount: visitDocuments.length, acceptedCount: visits.length, rejectedCount: rejects.visits, insertedCount: config.dryRun ? 0 : visits.length,
+      maxEventAt: maxOf(visits.map((v) => v.at)), maxSourceUpdatedAt: maxOf(visitDocuments.map((d) => d.updatedAt)),
+      limitReached: false, status: runStatus, errorCode: null, startedAt, completedAt },
+    { runId, source: "userAlbum", windowKind, windowStart: start.toISOString(), windowEnd: end.toISOString(),
+      readCount: chekiDocuments.length, acceptedCount: cheki.length, rejectedCount: rejects.cheki, insertedCount: config.dryRun ? 0 : cheki.length,
+      maxEventAt: maxOf(cheki.map((c) => c.at)), maxSourceUpdatedAt: maxOf(chekiDocuments.map((d) => d.updatedAt)),
+      limitReached: false, status: runStatus, errorCode: null, startedAt, completedAt },
+    { runId, source: "workshifts", windowKind, windowStart: start.toISOString(), windowEnd: end.toISOString(),
+      readCount: shiftDocuments.length, acceptedCount: shifts.length, rejectedCount: rejects.shifts, insertedCount: config.dryRun ? 0 : shifts.length,
+      maxEventAt: maxOf(shifts.map((s) => s.scheduledStart)), maxSourceUpdatedAt: maxOf(shiftDocuments.map((d) => d.updatedAt)),
+      limitReached: false, status: runStatus, errorCode: null, startedAt, completedAt },
+    { runId, source: "payments", windowKind, windowStart: start.toISOString(), windowEnd: end.toISOString(),
+      readCount: paymentDocuments.length + purchaseDocuments.length + userPaymentDocuments.length, acceptedCount: payments.length,
+      rejectedCount: 0, insertedCount: config.dryRun ? 0 : payments.length,
+      maxEventAt: maxOf(payments.map((p) => p.at)), maxSourceUpdatedAt: maxOf(payments.map((p) => p.sourceUpdatedAt)),
+      limitReached: false, status: degraded.some((d) => d.source === "userPayments") ? "degraded" : runStatus,
+      errorCode: degraded.find((d) => d.source === "userPayments")?.reasonCode ?? null, startedAt, completedAt },
+    { runId, source: "userRecordPresents", windowKind, windowStart: start.toISOString(), windowEnd: end.toISOString(),
+      readCount: presentDocuments.length, acceptedCount: presents.length, rejectedCount: rejects.presents, insertedCount: config.dryRun ? 0 : presents.length,
+      maxEventAt: maxOf(presents.map((p) => p.at)), maxSourceUpdatedAt: maxOf(presents.map((p) => p.sourceUpdatedAt)),
+      limitReached: false, status: degraded.some((d) => d.source === "userRecordPresents") ? "degraded" : runStatus,
+      errorCode: degraded.find((d) => d.source === "userRecordPresents")?.reasonCode ?? null, startedAt, completedAt },
+  ]);
+  await recordRejects(runId, [
+    { source: "userRecordVisits", reasonCode: "UNRESOLVED_MAID_OR_INVALID", count: rejects.visits },
+    { source: "userAlbum", reasonCode: "UNRESOLVED_MAID_OR_INVALID", count: rejects.cheki },
+    { source: "workshifts", reasonCode: "UNRESOLVED_MAID_OR_INVALID", count: rejects.shifts },
+    { source: "userRecordPresents", reasonCode: "UNRESOLVED_MAID_OR_INVALID", count: rejects.presents },
+  ]);
+
   console.info(JSON.stringify({
     dryRun: config.dryRun,
     window: { start: start.toISOString(), end: end.toISOString() },
@@ -316,53 +401,30 @@ if (process.env.SYNC_ALL_USERS === "true") {
   await syncAllUsers();
 }
 
-// バックフィル設定（いずれも無ければ通常の単一窓＝増分同期）:
-//   BACKFILL_FROM=YYYY-MM-DD … その日(UTC)から現在までを24時間窓で取り込む
-//   BACKFILL_TO=YYYY-MM-DD   … 終了日(UTC・この日は含まない)。長期間を数回に分けて実行する用
-//   BACKFILL_DAYS=N          … 過去N日を24時間窓で取り込む
-const DAY_MS = 24 * 60 * 60 * 1000;
-const backfillFrom = (process.env.BACKFILL_FROM || "").trim();
-const backfillTo = (process.env.BACKFILL_TO || "").trim();
-const backfillDays = Number(process.env.BACKFILL_DAYS || 0);
-
-const windows: Array<[Date, Date]> = [];
-if (backfillFrom || (Number.isInteger(backfillDays) && backfillDays > 0)) {
-  const now = Date.now();
-  let endMs = now;
-  if (backfillTo) {
-    const parsedTo = new Date(`${backfillTo}T00:00:00Z`);
-    if (Number.isNaN(parsedTo.getTime())) throw new Error("BACKFILL_TOはYYYY-MM-DD形式で指定してください");
-    endMs = Math.min(parsedTo.getTime(), now);
-  }
-  let startMs: number;
-  if (backfillFrom) {
-    const parsed = new Date(`${backfillFrom}T00:00:00Z`);
-    if (Number.isNaN(parsed.getTime())) throw new Error("BACKFILL_FROMはYYYY-MM-DD形式で指定してください");
-    startMs = parsed.getTime();
-  } else {
-    startMs = endMs - backfillDays * DAY_MS;
-  }
-  const totalWindows = Math.ceil((endMs - startMs) / DAY_MS);
-  if (totalWindows < 1) throw new Error("バックフィル開始日が終了日以降です");
-  if (totalWindows > 550) throw new Error(`バックフィル窓が多すぎます(${totalWindows})。BACKFILL_TO で550日以内に区切って実行してください`);
-  for (let cursor = startMs; cursor < endMs; cursor += DAY_MS) {
-    windows.push([new Date(cursor), new Date(Math.min(cursor + DAY_MS, endMs))]);
-  }
-} else {
-  windows.push([config.start, config.end]);
-}
+// 窓の組み立ては src/windows.ts の純関数へ委譲する（テスト可能にするため）。
+//   BACKFILL_FROM / BACKFILL_TO / BACKFILL_DAYS … 過去の明示的な取り込み
+//   RESCAN_DAYS                                  … 直近N日を毎回読み直し、後から入った
+//                                                  イベントの修正を取り込む（指摘8の短期対策）
+const windows = buildSyncWindows({
+  start: config.start,
+  end: config.end,
+  backfillFrom: process.env.BACKFILL_FROM,
+  backfillTo: process.env.BACKFILL_TO,
+  backfillDays: Number(process.env.BACKFILL_DAYS || 0),
+  rescanDays: Number(process.env.RESCAN_DAYS || 0),
+});
 
 // 窓ごとに実行。1窓失敗しても残りは続行し、最後にまとめて報告する（大量バックフィルの耐障害性）。
 let failedWindows = 0;
 let windowIndex = 0;
 const degradedSources = new Set<string>();
-for (const [windowStart, windowEnd] of windows) {
+for (const { start: windowStart, end: windowEnd, kind } of windows) {
   windowIndex += 1;
   // 途中でタイムアウトしても、どこまで進んだかログで分かるようにする。
-  if (windows.length > 1) console.info(`WINDOW_PROGRESS ${windowIndex}/${windows.length} ${windowStart.toISOString().slice(0, 10)}`);
+  if (windows.length > 1) console.info(`WINDOW_PROGRESS ${windowIndex}/${windows.length} ${kind} ${windowStart.toISOString().slice(0, 10)}`);
   try {
     if (windows.length > 1) console.info(`WINDOW ${windowStart.toISOString()} .. ${windowEnd.toISOString()}`);
-    const outcome = await syncWindow(windowStart, windowEnd);
+    const outcome = await syncWindow(windowStart, windowEnd, kind);
     for (const item of outcome.degraded) degradedSources.add(item.source);
   } catch (error) {
     failedWindows += 1;

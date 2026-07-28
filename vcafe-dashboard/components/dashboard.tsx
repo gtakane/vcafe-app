@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { buildTrend, crossVisitCounts, customerRows, filterData, summarize } from "@/lib/analytics";
-import type { AttendanceSubmission, Customer, Granularity, Maid, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Shift, Viewer, ViewerScopedData } from "@/lib/types";
+import type { AttendanceSubmission, Customer, Granularity, Maid, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Shift, SyncFreshness, Viewer, ViewerScopedData } from "@/lib/types";
 import type { GrowthMetrics } from "@/lib/growth";
 // 座席定数はサーバー依存の無い metrics から取る（growth は BigQuery を読み込むため）。
 import { mergedStayMinutes, SEATS_PER_MAID, shiftActualHours } from "@/lib/metrics";
@@ -578,7 +578,7 @@ function GrowthPanel({ growth, loading, error }: { growth: GrowthMetrics | null;
   </>;
 }
 
-export default function Dashboard({ initialData, initialStart, initialEnd, viewer }: { initialData: ViewerScopedData; initialStart: string; initialEnd: string; viewer: Viewer }) {
+export default function Dashboard({ initialData, initialStart, initialEnd, viewer, freshness }: { initialData: ViewerScopedData; initialStart: string; initialEnd: string; viewer: Viewer; freshness?: SyncFreshness | null }) {
   const [view, setView] = useState<View>("overview");
   const [start, setStart] = useState(initialStart);
   const [end, setEnd] = useState(initialEnd);
@@ -670,7 +670,24 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
         <label>集計<select value={granularity} onChange={(e)=>setGranularity(e.target.value as Granularity)}><option value="hour">時間別</option><option value="day">日次</option><option value="week">週次</option><option value="month">月次</option></select></label>
         {viewer.role === "admin" && <label>メイド<select value={maidId} onChange={(e)=>setMaidId(e.target.value)}><option value="">すべて</option>{initialData.maids.map((m)=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>}
       </section>}
-      <div className="freshness"><span className="status-dot"/> 最終同期 {new Date(remoteData.generatedAt).toLocaleString("ja-JP",{timeZone:"Asia/Tokyo"})} <b>・分析用データ</b>{loading && " ・読込中"}{loadError && <span className="error-inline"> ・{loadError}</span>}</div>
+      {/* 「最終同期」は sync_runs の watermark。API応答時刻を出すと同期が止まっても
+          常に「今」が表示され、停止に気づけない。取得できない場合は不明と明示する。 */}
+      {(() => {
+        const stale = freshness?.freshnessLagMinutes != null && freshness.freshnessLagMinutes > 180;
+        const degraded = freshness?.lastStatus === "degraded";
+        const label = freshness?.lastSyncedAt
+          ? new Date(freshness.lastSyncedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })
+          : "不明";
+        return <div className="freshness">
+          <span className="status-dot" style={stale || degraded ? { background: "#d6336c" } : undefined}/>
+          {" "}最終同期 {label} <b>・分析用データ</b>
+          {stale && <span className="error-inline"> ・{Math.floor((freshness!.freshnessLagMinutes ?? 0) / 60)}時間以上更新されていません</span>}
+          {degraded && <span className="error-inline"> ・一部のデータを取得できていません</span>}
+          {!freshness && <span className="error-inline"> ・同期状況を取得できませんでした</span>}
+          {loading && " ・読込中"}
+          {loadError && <span className="error-inline"> ・{loadError}</span>}
+        </div>;
+      })()}
 
       {view === "overview" && <>
         <section className="metrics"><Metric label="ご帰宅数" value={`${number.format(totals.visits)}件`} note={`ユニーク ${totals.customerCount}名`}/><Metric label="売上" value={yen.format(totals.revenue)} note={`有料ご帰宅 ${totals.paid}件`} tone="purple"/><Metric label="実働時間" value={`${totals.workHours.toFixed(1)}h`} note={`遅刻合計 ${totals.lateMinutes.toFixed(0)}分`} tone="blue"/><Metric label="記念撮影" value={`${totals.cheki}枚`} note={`撮影率 ${totals.visits ? (totals.cheki/totals.visits*100).toFixed(1) : 0}%`} tone="orange"/>{viewer.role === "admin" && <><Metric label="1日あたり利用者数(平均)" value={growth ? `${number.format(growth.avgDau)}名` : "—"} note={growth ? `最も多い日 ${number.format(growth.peakDau)}名` : (growthError || "集計中")} tone="blue" hint="DAU（デイリー・アクティブ・ユーザー）＝その営業日に1回以上ご帰宅したユーザーの実人数。同じ人が何回ご帰宅しても1名と数えます。『平均』は選択期間の1日平均、『最も多い日』は期間中で最大だった日の人数です。"/><Metric label="新規登録者数" value={growth ? `${number.format(growth.newRegistrations)}名` : "—"} note={growth ? `課金転換 ${pct(growth.newPaidConversionRate)}` : (growthError || "集計中")} tone="purple" hint="選択期間内に新しく会員登録したユーザーの人数。課金転換は、そのうち期間内に有料ご帰宅をした人の割合です。"/></>}</section>

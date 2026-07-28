@@ -182,3 +182,11 @@ export interface ViewerScopedData extends Omit<AnalyticsData, "customers"> {
   customers: ViewerScopedCustomer[];
   rankBreakdown?: Array<{ rank: string; customers: number }>;
 }
+
+/** 同期の鮮度。UIの「最終同期」はこれを使う（API応答時刻ではない）。 */
+export interface SyncFreshness {
+  lastSyncedAt: string | null;
+  lastEventAt: string | null;
+  lastStatus: string | null;
+  freshnessLagMinutes: number | null;
+}
