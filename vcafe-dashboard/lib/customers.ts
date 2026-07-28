@@ -4,6 +4,12 @@ import { customers as mockCustomers } from "./mock-data.ts";
 // ユーザーDBはダッシュボード上部の期間フィルタから独立して「全会員」を扱う。
 // 既定は登録日(registrationDate)の昇順＝古い会員から。
 
+export interface NumericFilter {
+  key: string; // CUSTOMER_NUMERIC_KEYS のいずれか
+  min?: number;
+  max?: number;
+}
+
 export interface CustomerQuery {
   q?: string;
   rank?: string;
@@ -11,6 +17,7 @@ export interface CustomerQuery {
   paying?: "yes" | "no" | "";
   regFrom?: string; // YYYY-MM-DD
   regTo?: string;
+  numeric?: NumericFilter[]; // 数値指標の範囲絞り込み（例: 課金額(通算) 10万円以上）
   sort?: string;
   dir?: "asc" | "desc";
   limit?: number;
@@ -28,6 +35,20 @@ export const CUSTOMER_SORT_KEYS = new Set([
   "presentAmount", "coin", "rewardPoint", "totalVisitAmount", "maxConsecutiveVisitDays",
   "paymentCount", "paymentAmount",
 ]);
+
+// 数値範囲フィルタを許可する列（ホワイトリスト。SQLへはこの名前しか埋め込まない）。
+export const CUSTOMER_NUMERIC_KEYS = new Set([
+  "birthYear", "purchasedItemCoin", "purchasedItemQuantity", "presentAmount",
+  "coin", "rewardPoint", "totalVisitAmount", "maxConsecutiveVisitDays",
+  "paymentCount", "paymentAmount",
+]);
+
+// 未設定(NULL)は0として比較する（「課金額 0円以上」で全員が出る素直な挙動にする）。
+function numericFilters(query: CustomerQuery): NumericFilter[] {
+  return (query.numeric || []).filter((f) =>
+    CUSTOMER_NUMERIC_KEYS.has(f.key) &&
+    ((typeof f.min === "number" && Number.isFinite(f.min)) || (typeof f.max === "number" && Number.isFinite(f.max))));
+}
 
 const MAX_LIMIT = 5000;
 
@@ -48,6 +69,11 @@ function filterMock(query: CustomerQuery): CustomerListResult {
     const registered = customer.registeredAt ? customer.registeredAt.slice(0, 10) : "";
     if (query.regFrom && (!registered || registered < query.regFrom)) return false;
     if (query.regTo && (!registered || registered > query.regTo)) return false;
+    for (const f of numericFilters(query)) {
+      const value = Number(customer[f.key as keyof Customer] ?? 0) || 0;
+      if (typeof f.min === "number" && value < f.min) return false;
+      if (typeof f.max === "number" && value > f.max) return false;
+    }
     return true;
   });
   const key = (CUSTOMER_SORT_KEYS.has(query.sort || "") ? query.sort : "registeredAt") as keyof Customer;
@@ -93,6 +119,13 @@ export async function loadCustomers(query: CustomerQuery): Promise<CustomerListR
   if (query.regTo) { conditions.push('DATE(c.registeredAt, "Asia/Tokyo") <= DATE(@regTo)'); params.regTo = query.regTo; }
   if (query.paying === "yes") conditions.push("(c.lastPaymentAt IS NOT NULL OR p.paymentCount > 0)");
   if (query.paying === "no") conditions.push("(c.lastPaymentAt IS NULL AND COALESCE(p.paymentCount, 0) = 0)");
+  numericFilters(query).forEach((f, index) => {
+    // 課金2列はJOIN側(p)、それ以外はcustomers側(c)。列名はホワイトリスト済みのみ。
+    const table = f.key === "paymentCount" || f.key === "paymentAmount" ? "p" : "c";
+    const expr = `COALESCE(${table}.${f.key}, 0)`;
+    if (typeof f.min === "number" && Number.isFinite(f.min)) { conditions.push(`${expr} >= @nmin${index}`); params[`nmin${index}`] = f.min; }
+    if (typeof f.max === "number" && Number.isFinite(f.max)) { conditions.push(`${expr} <= @nmax${index}`); params[`nmax${index}`] = f.max; }
+  });
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
   const [rows] = await bigquery.query({

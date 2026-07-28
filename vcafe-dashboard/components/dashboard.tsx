@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { buildTrend, customerRows, filterData, summarize } from "@/lib/analytics";
-import type { AnalyticsData, AttendanceSubmission, Customer, Granularity, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Viewer } from "@/lib/types";
+import type { AnalyticsData, AttendanceSubmission, Customer, Granularity, Maid, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Shift, Viewer } from "@/lib/types";
 import type { GrowthMetrics } from "@/lib/growth";
 import LogoutButton from "@/components/logout-button";
 
@@ -40,17 +40,17 @@ function Metric({ label, value, note, tone = "pink", hint }: { label: string; va
 type ReportRow = MaidMonthlyReport & { averageVisit: number; photoPrice: number };
 
 // 本番 maidWorkReport の月次実績17列。kind は表示形式とソートの型。
-const REPORT_COLUMNS: Array<{ key: keyof ReportRow; label: string; kind: "text" | "num" | "money" | "hours" | "float" }> = [
+const REPORT_COLUMNS: Array<{ key: keyof ReportRow; label: string; kind: "text" | "num" | "money" | "hours" | "float" | "trunc" }> = [
   { key: "nickname", label: "メイド名", kind: "text" },
   { key: "attendance", label: "お給仕回数", kind: "num" },
   { key: "totalWorkTimes", label: "お給仕時間", kind: "hours" },
   { key: "late", label: "遅刻回数", kind: "num" },
-  { key: "latetime", label: "遅刻時間", kind: "float" },
+  { key: "latetime", label: "遅刻時間", kind: "trunc" },
   { key: "totalReservation", label: "予約ご帰宅回数", kind: "num" },
   { key: "totalWorkTimesReserve", label: "お給仕時間(予約)", kind: "float" },
   { key: "presumeTotalWorkTimeReserve", label: "見なしお給仕時間(予約)", kind: "float" },
   { key: "lateReservation", label: "遅刻回数(予約)", kind: "num" },
-  { key: "latetimeReservation", label: "遅刻時間(予約)", kind: "float" },
+  { key: "latetimeReservation", label: "遅刻時間(予約)", kind: "trunc" },
   { key: "totalVisits", label: "ご帰宅数", kind: "num" },
   { key: "totalOtameshi", label: "お試しご帰宅回数", kind: "num" },
   { key: "averageVisit", label: "平均ご帰宅数", kind: "float" },
@@ -60,11 +60,15 @@ const REPORT_COLUMNS: Array<{ key: keyof ReportRow; label: string; kind: "text" 
   { key: "photoPrice", label: "記念撮影売上", kind: "money" },
 ];
 
+// 遅刻系は小数点第3位以下を切り捨てる（四捨五入しない）。
+const truncate2 = (n: number) => Math.floor(n * 100) / 100;
+
 function formatCell(value: number | string, kind: string) {
   if (kind === "text") return String(value);
   const n = Number(value);
   if (kind === "money") return yen.format(n);
   if (kind === "hours") return `${n.toFixed(1)}h`;
+  if (kind === "trunc") return truncate2(n).toFixed(2);
   if (kind === "float") return n.toFixed(2);
   return number.format(n);
 }
@@ -180,7 +184,7 @@ const LOG_COLUMNS: Array<{ key: keyof MaidVisitLog; label: string; align?: "righ
 
 const jstDateTime = (value: string) => new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 
-function VisitLogTable({ logs, hideMaid, hideCustomer, onExport, exportName }: { logs: MaidVisitLog[]; hideMaid?: boolean; hideCustomer?: boolean; onExport: (name: string, data: Array<Array<string | number>>) => void; exportName: string }) {
+function VisitLogTable({ logs, hideMaid, hideCustomer, onExport, exportName, serveMinutes }: { logs: MaidVisitLog[]; hideMaid?: boolean; hideCustomer?: boolean; onExport: (name: string, data: Array<Array<string | number>>) => void; exportName: string; serveMinutes?: number | null }) {
   const columns = LOG_COLUMNS.filter((c) => !(hideMaid && c.key === "maidName") && !(hideCustomer && c.key === "customerName"));
   const cell = (log: MaidVisitLog, key: keyof MaidVisitLog) => {
     if (key === "at") return jstDateTime(log.at);
@@ -198,7 +202,8 @@ function VisitLogTable({ logs, hideMaid, hideCustomer, onExport, exportName }: {
   return <>
     <div className="log-summary">
       <span><b>{number.format(logs.length)}</b>件</span>
-      <span>滞在合計 <b>{number.format(totals.minutes)}</b>分</span>
+      <span title="ユーザーごとの滞在分の合計。同時に最大3名が着席できるため、実お給仕時間より大きくなります">延べ滞在 <b>{number.format(totals.minutes)}</b>分</span>
+      {serveMinutes != null && serveMinutes > 0 && <span title="この期間の実お給仕時間（打刻ベース）。延べ滞在は同時着席のぶん、これを超えます">実お給仕 <b>{number.format(Math.round(serveMinutes))}</b>分</span>}
       <span>売上 <b>{yen.format(totals.revenue)}</b></span>
       <span>チェキ <b>{number.format(totals.cheki)}</b>枚</span>
       <span>アイテム使用 <b>{number.format(totals.presents)}</b></span>
@@ -211,7 +216,7 @@ function VisitLogTable({ logs, hideMaid, hideCustomer, onExport, exportName }: {
 }
 
 // 個別ログを取得して表示する（メイド個別／ユーザー個別で共通）。
-function VisitLogPanel({ start, end, maidId, customerId, hideMaid, hideCustomer, exportName }: { start: string; end: string; maidId?: string; customerId?: string; hideMaid?: boolean; hideCustomer?: boolean; exportName: string }) {
+function VisitLogPanel({ start, end, maidId, customerId, hideMaid, hideCustomer, exportName, serveMinutes }: { start: string; end: string; maidId?: string; customerId?: string; hideMaid?: boolean; hideCustomer?: boolean; exportName: string; serveMinutes?: number | null }) {
   const [logs, setLogs] = useState<MaidVisitLog[] | null>(null);
   const [error, setError] = useState("");
   const downloadCsv = (filename: string, rows: Array<Array<string | number>>) => {
@@ -234,7 +239,73 @@ function VisitLogPanel({ start, end, maidId, customerId, hideMaid, hideCustomer,
   if (error) return <p className="error">{error}</p>;
   if (!maidId && !customerId) return <p className="muted">対象を選択してください</p>;
   if (!logs) return <p className="muted">読込中…</p>;
-  return <VisitLogTable logs={logs} hideMaid={hideMaid} hideCustomer={hideCustomer} onExport={downloadCsv} exportName={exportName} />;
+  return <VisitLogTable logs={logs} hideMaid={hideMaid} hideCustomer={hideCustomer} onExport={downloadCsv} exportName={exportName} serveMinutes={serveMinutes} />;
+}
+
+// 勤怠実績: 全行表示・列ソート・メイド/状態フィルタ付き。遅刻分は小数点第3位以下切り捨て。
+type AttendanceSortKey = "date" | "maid" | "worked" | "late";
+
+function AttendanceTable({ shifts, maids }: { shifts: Shift[]; maids: Maid[] }) {
+  const [maidFilter, setMaidFilter] = useState("");
+  const [status, setStatus] = useState(""); // "" | late | ontime | unpunched
+  const [sortKey, setSortKey] = useState<AttendanceSortKey>("date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const rows = useMemo(() => {
+    const named = shifts.map((s) => {
+      const lateMinutes = s.actualStart ? Math.max(0, (new Date(s.actualStart).getTime() - new Date(s.scheduledStart).getTime()) / 60000) : 0;
+      const workedHours = s.actualStart && s.actualEnd ? (new Date(s.actualEnd).getTime() - new Date(s.actualStart).getTime()) / 3600000 : 0;
+      return { shift: s, maidName: maids.find((m) => m.id === s.maidId)?.name || "—", lateMinutes, workedHours, unpunched: !s.actualStart || !s.actualEnd };
+    });
+    const filtered = named.filter((r) => {
+      if (maidFilter && r.shift.maidId !== maidFilter) return false;
+      if (status === "late") return r.lateMinutes > 0;
+      if (status === "ontime") return r.lateMinutes === 0 && !r.unpunched;
+      if (status === "unpunched") return r.unpunched;
+      return true;
+    });
+    const direction = sortDir === "asc" ? 1 : -1;
+    return filtered.sort((a, b) => {
+      if (sortKey === "maid") return a.maidName.localeCompare(b.maidName, "ja") * direction;
+      if (sortKey === "worked") return (a.workedHours - b.workedHours) * direction;
+      if (sortKey === "late") return (a.lateMinutes - b.lateMinutes) * direction;
+      return a.shift.scheduledStart.localeCompare(b.shift.scheduledStart) * direction;
+    });
+  }, [shifts, maids, maidFilter, status, sortKey, sortDir]);
+
+  const toggleSort = (key: AttendanceSortKey) => {
+    if (key === sortKey) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    else { setSortKey(key); setSortDir(key === "maid" ? "asc" : "desc"); }
+  };
+  const arrow = (key: AttendanceSortKey) => (sortKey === key ? (sortDir === "desc" ? " ▼" : " ▲") : "");
+  const time = (value: string) => new Date(value).toLocaleTimeString("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit" });
+  const sortableTh = (key: AttendanceSortKey, label: string) => (
+    <th onClick={() => toggleSort(key)} title="クリックで並び替え" style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap", color: sortKey === key ? "#ef5da8" : undefined }}>{label}{arrow(key)}</th>
+  );
+
+  return <section className="panel table-panel">
+    <div className="panel-head">
+      <div><p className="eyebrow">ATTENDANCE</p><h2>勤怠実績</h2><small>{number.format(rows.length)}件・遅刻は小数点第3位以下切り捨て</small></div>
+    </div>
+    <div className="table-filters">
+      <label>メイド<select value={maidFilter} onChange={(e) => setMaidFilter(e.target.value)}><option value="">すべて</option>{maids.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label>
+      <label>状態<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">すべて</option><option value="late">遅刻のみ</option><option value="ontime">定時のみ</option><option value="unpunched">未打刻あり</option></select></label>
+      {(maidFilter || status) && <button className="secondary" onClick={() => { setMaidFilter(""); setStatus(""); }}>条件をクリア</button>}
+    </div>
+    {rows.length === 0 ? <p className="muted">条件に一致するシフトがありません</p> :
+    <div className="table-scroll tall"><table className="freeze-head"><thead><tr>
+      {sortableTh("date", "日付")}{sortableTh("maid", "メイド")}<th>予定</th><th>実績</th>{sortableTh("worked", "実働")}{sortableTh("late", "遅刻")}
+    </tr></thead><tbody>{rows.map(({ shift: s, maidName, lateMinutes, workedHours }) => (
+      <tr key={s.id}>
+        <td style={{ whiteSpace: "nowrap" }}>{new Date(s.scheduledStart).toLocaleDateString("ja-JP", { timeZone: "Asia/Tokyo" })}</td>
+        <td style={{ whiteSpace: "nowrap" }}><b>{maidName}</b></td>
+        <td style={{ whiteSpace: "nowrap" }}>{time(s.scheduledStart)}–{time(s.scheduledEnd)}</td>
+        <td style={{ whiteSpace: "nowrap" }}>{s.actualStart ? time(s.actualStart) : "未打刻"}–{s.actualEnd ? time(s.actualEnd) : "未打刻"}</td>
+        <td>{workedHours.toFixed(1)}h</td>
+        <td><span className={lateMinutes ? "late" : "ok"}>{lateMinutes ? `${truncate2(lateMinutes)}分` : "定時"}</span></td>
+      </tr>
+    ))}</tbody></table></div>}
+  </section>;
 }
 
 type CustomerCol = { key: keyof Customer; label: string; kind: "text" | "num" | "money" | "date" | "gender" | "year" };
@@ -263,6 +334,13 @@ const CUSTOMER_DB_COLUMNS: CustomerCol[] = [
 
 const SORTABLE_DB_KEYS = new Set<string>(["registeredAt", "name", "rank", "gender", "birthYear", "lastVisitAt", "lastPaymentAt", "lastPurchasedItemAt", "lastPresentAt", "purchasedItemCoin", "purchasedItemQuantity", "presentAmount", "coin", "rewardPoint", "totalVisitAmount", "maxConsecutiveVisitDays", "paymentCount", "paymentAmount"]);
 
+// 数値範囲で絞り込める指標（サーバー側 CUSTOMER_NUMERIC_KEYS と対応）。よく使う順に並べる。
+const NUMERIC_FILTER_COLUMNS = ["totalVisitAmount", "paymentAmount", "paymentCount", "maxConsecutiveVisitDays", "purchasedItemQuantity", "purchasedItemCoin", "presentAmount", "coin", "rewardPoint", "birthYear"]
+  .map((key) => CUSTOMER_DB_COLUMNS.find((c) => String(c.key) === key))
+  .filter((c): c is NonNullable<typeof c> => Boolean(c));
+
+type NumericFilterChip = { key: string; min: string; max: string };
+
 function CustomerDatabase({ onExport }: { onExport: (name: string, data: Array<Array<string | number>>) => void }) {
   const [query, setQuery] = useState("");
   const [rank, setRank] = useState("");
@@ -270,6 +348,11 @@ function CustomerDatabase({ onExport }: { onExport: (name: string, data: Array<A
   const [paying, setPaying] = useState("");
   const [regFrom, setRegFrom] = useState("");
   const [regTo, setRegTo] = useState("");
+  // 数値指標の範囲フィルタ（確定分のチップ＋編集中の1行）。
+  const [numFilters, setNumFilters] = useState<NumericFilterChip[]>([]);
+  const [nfKey, setNfKey] = useState(String(NUMERIC_FILTER_COLUMNS[0]?.key || "totalVisitAmount"));
+  const [nfMin, setNfMin] = useState("");
+  const [nfMax, setNfMax] = useState("");
   // 既定は登録日の古い順（会員の起点から）。
   const [sortKey, setSortKey] = useState("registeredAt");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -290,6 +373,10 @@ function CustomerDatabase({ onExport }: { onExport: (name: string, data: Array<A
         if (paying) params.set("paying", paying);
         if (regFrom) params.set("regFrom", regFrom);
         if (regTo) params.set("regTo", regTo);
+        for (const f of numFilters) {
+          if (f.min !== "") params.set(`min_${f.key}`, f.min);
+          if (f.max !== "") params.set(`max_${f.key}`, f.max);
+        }
         const response = await fetch(`/api/customers?${params}`, { signal: controller.signal, cache: "no-store" });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || "ユーザー一覧を取得できませんでした");
@@ -298,7 +385,7 @@ function CustomerDatabase({ onExport }: { onExport: (name: string, data: Array<A
       finally { if (!controller.signal.aborted) setLoading(false); }
     }, 250);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [query, rank, gender, paying, regFrom, regTo, sortKey, sortDir]);
+  }, [query, rank, gender, paying, regFrom, regTo, numFilters, sortKey, sortDir]);
 
   const rows = result?.customers || [];
   // 選択肢は取得したユーザー自身から作る（期間フィルタ由来のデータに依存させない）。
@@ -318,8 +405,15 @@ function CustomerDatabase({ onExport }: { onExport: (name: string, data: Array<A
     if (c.kind === "date") return value ? jstDate(String(value)) : "—";
     return String(value ?? "—");
   };
-  const clearFilters = () => { setQuery(""); setRank(""); setGender(""); setPaying(""); setRegFrom(""); setRegTo(""); };
-  const hasFilter = Boolean(query || rank || gender || paying || regFrom || regTo);
+  const clearFilters = () => { setQuery(""); setRank(""); setGender(""); setPaying(""); setRegFrom(""); setRegTo(""); setNumFilters([]); setNfMin(""); setNfMax(""); };
+  const hasFilter = Boolean(query || rank || gender || paying || regFrom || regTo || numFilters.length);
+  const numericLabel = (key: string) => NUMERIC_FILTER_COLUMNS.find((c) => String(c.key) === key)?.label || key;
+  const addNumericFilter = () => {
+    if (nfMin === "" && nfMax === "") return;
+    // 同じ指標は上書き（1指標につき1つの範囲）。
+    setNumFilters((prev) => [...prev.filter((f) => f.key !== nfKey), { key: nfKey, min: nfMin, max: nfMax }]);
+    setNfMin(""); setNfMax("");
+  };
   const rightAligned = (c: CustomerCol) => c.kind === "num" || c.kind === "money" || c.kind === "year";
 
   return <>
@@ -336,6 +430,17 @@ function CustomerDatabase({ onExport }: { onExport: (name: string, data: Array<A
         <label>登録日(から)<input type="date" value={regFrom} onChange={(e) => setRegFrom(e.target.value)} /></label>
         <label>登録日(まで)<input type="date" value={regTo} onChange={(e) => setRegTo(e.target.value)} /></label>
         {hasFilter && <button className="secondary" onClick={clearFilters}>条件をクリア</button>}
+      </div>
+      <div className="table-filters">
+        <label>数値で絞り込み<select value={nfKey} onChange={(e) => setNfKey(e.target.value)}>{NUMERIC_FILTER_COLUMNS.map((c) => <option key={String(c.key)} value={String(c.key)}>{c.label}</option>)}</select></label>
+        <label>以上<input type="number" inputMode="numeric" style={{ width: "7rem" }} value={nfMin} onChange={(e) => setNfMin(e.target.value)} placeholder="下限" /></label>
+        <label>以下<input type="number" inputMode="numeric" style={{ width: "7rem" }} value={nfMax} onChange={(e) => setNfMax(e.target.value)} placeholder="上限" /></label>
+        <button className="secondary" onClick={addNumericFilter} disabled={nfMin === "" && nfMax === ""}>この条件で絞り込む</button>
+        {numFilters.map((f) => (
+          <button key={f.key} className="secondary" title="クリックで解除" onClick={() => setNumFilters((prev) => prev.filter((x) => x.key !== f.key))}>
+            {numericLabel(f.key)} {f.min !== "" ? `${number.format(Number(f.min))}以上` : ""}{f.min !== "" && f.max !== "" ? "・" : ""}{f.max !== "" ? `${number.format(Number(f.max))}以下` : ""} ✕
+          </button>
+        ))}
       </div>
       {error ? <p className="error">{error}</p> : loading && !result ? <p className="muted">読込中…</p> : rows.length === 0 ? <p className="muted">条件に一致するユーザーがいません</p> :
       <div className="table-scroll tall"><table className="freeze-col freeze-head"><thead><tr>{CUSTOMER_DB_COLUMNS.map((c) => (
@@ -567,7 +672,15 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
             <div><p className="eyebrow">VISIT LOG</p><h2>{viewer.role === "admin" ? "メイド個別のご帰宅明細" : "あなたのご帰宅明細"}</h2><small>期間 {start}〜{end}・いつ／誰が／何分／どのチケット／支払い方法／チェキ／アイテム使用</small></div>
             {viewer.role === "admin" && <label>メイド<select value={logMaidId} onChange={(e) => setLogMaidId(e.target.value)}><option value="">選択してください</option>{initialData.maids.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label>}
           </div>
-          <VisitLogPanel start={start} end={end} maidId={viewer.role === "maid" ? viewer.maidId || "" : logMaidId} hideMaid exportName={`visit-log_${logMaidId || viewer.maidId || "me"}_${start}_${end}.csv`} />
+          <VisitLogPanel start={start} end={end} maidId={viewer.role === "maid" ? viewer.maidId || "" : logMaidId} hideMaid exportName={`visit-log_${logMaidId || viewer.maidId || "me"}_${start}_${end}.csv`}
+            serveMinutes={(() => {
+              // 選択メイドの実お給仕時間（打刻ベース）。延べ滞在との比較用に並記する。
+              const id = viewer.role === "maid" ? viewer.maidId || "" : logMaidId;
+              if (!id) return null;
+              return data.shifts
+                .filter((s) => s.maidId === id && s.actualStart && s.actualEnd)
+                .reduce((acc, s) => acc + Math.max(0, (new Date(s.actualEnd!).getTime() - new Date(s.actualStart!).getTime()) / 60000), 0);
+            })()} />
         </section>}
       </>}
 
@@ -577,7 +690,7 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
 
       {view === "relations" && viewer.role === "admin" && <CrossMatrix maids={data.maids} customers={customerStats} counts={crossCounts} onExport={downloadCsv} />}
 
-      {view === "attendance" && <><section className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">ATTENDANCE</p><h2>勤怠実績</h2></div></div><div className="table-scroll"><table><thead><tr><th>日付</th><th>メイド</th><th>予定</th><th>実績</th><th>実働</th><th>遅刻</th></tr></thead><tbody>{data.shifts.slice().reverse().slice(0,40).map((s)=>{const m=data.maids.find((x)=>x.id===s.maidId);const time=(value:string)=>new Date(value).toLocaleTimeString("ja-JP",{timeZone:"Asia/Tokyo",hour:"2-digit",minute:"2-digit"});const mins=s.actualStart?Math.max(0,(new Date(s.actualStart).getTime()-new Date(s.scheduledStart).getTime())/60000):0;const hrs=s.actualStart&&s.actualEnd?(new Date(s.actualEnd).getTime()-new Date(s.actualStart).getTime())/3600000:0;return <tr key={s.id}><td>{new Date(s.scheduledStart).toLocaleDateString("ja-JP",{timeZone:"Asia/Tokyo"})}</td><td><b>{m?.name}</b></td><td>{time(s.scheduledStart)}–{time(s.scheduledEnd)}</td><td>{s.actualStart?time(s.actualStart):"未打刻"}–{s.actualEnd?time(s.actualEnd):"未打刻"}</td><td>{hrs.toFixed(1)}h</td><td><span className={mins?"late":"ok"}>{mins?`${mins}分`:"定時"}</span></td></tr>})}</tbody></table></div></section>{viewer.role === "admin" && <section className="panel table-panel submissions-panel"><div className="panel-head"><div><p className="eyebrow">DISCORD SUBMISSIONS</p><h2>Discord勤怠申請</h2><small>確認用一覧・シフト本体への自動反映なし</small></div></div>{submissionError ? <p className="error">{submissionError}</p> : <div className="table-scroll"><table><thead><tr><th>対象日</th><th>種別</th><th>メイド</th><th>対象時間</th><th>理由・補足</th><th>受付日時</th></tr></thead><tbody>{submissions.map((s)=><tr key={s.id}><td>{s.targetDate || "—"}</td><td><b>{s.eventLabel}</b></td><td>{s.maidName}</td><td>{s.targetTime || "—"}</td><td>{s.reason || "—"}</td><td>{s.receivedAt ? new Date(s.receivedAt).toLocaleString("ja-JP",{timeZone:"Asia/Tokyo"}) : "—"}</td></tr>)}{submissions.length === 0 && <tr><td colSpan={6}>申請はまだありません</td></tr>}</tbody></table></div>}</section>}</>}
+      {view === "attendance" && <><AttendanceTable shifts={data.shifts} maids={data.maids} />{viewer.role === "admin" && <section className="panel table-panel submissions-panel"><div className="panel-head"><div><p className="eyebrow">DISCORD SUBMISSIONS</p><h2>Discord勤怠申請</h2><small>確認用一覧・シフト本体への自動反映なし</small></div></div>{submissionError ? <p className="error">{submissionError}</p> : <div className="table-scroll"><table><thead><tr><th>対象日</th><th>種別</th><th>メイド</th><th>対象時間</th><th>理由・補足</th><th>受付日時</th></tr></thead><tbody>{submissions.map((s)=><tr key={s.id}><td>{s.targetDate || "—"}</td><td><b>{s.eventLabel}</b></td><td>{s.maidName}</td><td>{s.targetTime || "—"}</td><td>{s.reason || "—"}</td><td>{s.receivedAt ? new Date(s.receivedAt).toLocaleString("ja-JP",{timeZone:"Asia/Tokyo"}) : "—"}</td></tr>)}{submissions.length === 0 && <tr><td colSpan={6}>申請はまだありません</td></tr>}</tbody></table></div>}</section>}</>}
     </main>
   </div>;
 }

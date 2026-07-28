@@ -1,6 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
-import { loadCustomers } from "@/lib/customers";
+import { CUSTOMER_NUMERIC_KEYS, loadCustomers, type NumericFilter } from "@/lib/customers";
+
+// min_<列名>/max_<列名> 形式のクエリを数値フィルタへ変換する（列名はホワイトリスト照合）。
+function parseNumericFilters(params: URLSearchParams): NumericFilter[] {
+  const filters: NumericFilter[] = [];
+  for (const key of CUSTOMER_NUMERIC_KEYS) {
+    const min = Number(params.get(`min_${key}`));
+    const max = Number(params.get(`max_${key}`));
+    const filter: NumericFilter = { key };
+    if (params.get(`min_${key}`) !== null && Number.isFinite(min)) filter.min = min;
+    if (params.get(`max_${key}`) !== null && Number.isFinite(max)) filter.max = max;
+    if (filter.min !== undefined || filter.max !== undefined) filters.push(filter);
+  }
+  return filters;
+}
 
 // ユーザーDBは全会員が対象で、ダッシュボード上部の期間フィルタには依存しない。
 export async function GET(request: NextRequest) {
@@ -17,6 +31,7 @@ export async function GET(request: NextRequest) {
       paying: (params.get("paying") as "yes" | "no" | null) || "",
       regFrom: date(params.get("regFrom")),
       regTo: date(params.get("regTo")),
+      numeric: parseNumericFilters(params),
       sort: params.get("sort") || undefined,
       dir: params.get("dir") === "desc" ? "desc" : "asc",
       limit: Number(params.get("limit")) || undefined,
