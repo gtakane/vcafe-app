@@ -2,6 +2,7 @@ import { BigQuery } from "@google-cloud/bigquery";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { loadSyncConfig } from "./config.ts";
+import { fetchAllPages, type PageCursor } from "./paging.ts";
 import { buildMaidDirectory, mapCheki, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
@@ -17,33 +18,62 @@ const sourceDb = getFirestore(sourceApp);
 const bigquery = new BigQuery({ projectId: config.analyticsProjectId });
 const syncedAt = new Date().toISOString();
 
-async function readGroup(group: string, dateField: string, start: Date, end: Date) {
-  const snapshots = await sourceDb.collectionGroup(group)
-    .where(dateField, ">=", Timestamp.fromDate(start))
-    .where(dateField, "<", Timestamp.fromDate(end))
-    .limit(config.maxDocuments)
-    .get();
-  return snapshots.docs.map((document): SourceDocument => ({
-    id: document.id,
-    parentId: document.ref.parent.parent?.id,
-    data: document.data(),
-    updatedAt: document.updateTime.toDate().toISOString(),
-  }));
+/** 取得結果。上限に到達した場合は limitReached=true（呼び出し側で失敗させる）。 */
+interface ReadResult {
+  documents: SourceDocument[];
+  readCount: number;
+  limitReached: boolean;
 }
 
-// トップレベルコレクションを日付範囲で読む。単一フィールドの自動インデックスで動くため
-// collectionGroup と違い追加のインデックス作成が不要。
-async function readCollection(name: string, dateField: string, start: Date, end: Date) {
-  const snapshots = await sourceDb.collection(name)
+/**
+ * 日付範囲＋ドキュメントIDの複合カーソルでページングして読む。
+ * 旧実装は .limit() のみで、上限を超えた分が無言で欠落していた。
+ */
+async function readPaged(
+  baseQuery: FirebaseFirestore.Query,
+  dateField: string,
+  start: Date,
+  end: Date,
+  withParent: boolean,
+): Promise<ReadResult> {
+  const ranged = baseQuery
     .where(dateField, ">=", Timestamp.fromDate(start))
     .where(dateField, "<", Timestamp.fromDate(end))
-    .limit(config.maxDocuments)
-    .get();
-  return snapshots.docs.map((document): SourceDocument => ({
-    id: document.id,
-    data: document.data(),
-    updatedAt: document.updateTime.toDate().toISOString(),
-  }));
+    .orderBy(dateField)
+    .orderBy("__name__"); // 同一時刻が並んでも前進できるようにする
+
+  const result = await fetchAllPages<SourceDocument & { __cursor: PageCursor }>(
+    async (cursor, size) => {
+      let query = ranged.limit(size);
+      if (cursor) query = query.startAfter(cursor.dateValue, cursor.path);
+      const snapshot = await query.get();
+      const documents = snapshot.docs.map((document) => ({
+        id: document.id,
+        parentId: withParent ? document.ref.parent.parent?.id : undefined,
+        data: document.data(),
+        updatedAt: document.updateTime.toDate().toISOString(),
+        __cursor: { dateValue: document.get(dateField), path: document.ref.path },
+      }));
+      const last = documents.at(-1);
+      return { documents, cursor: last ? { dateValue: last.__cursor.dateValue, path: last.__cursor.path } : null };
+    },
+    { pageSize: config.pageSize, maxTotal: config.maxDocuments },
+  );
+
+  return {
+    documents: result.documents.map(({ __cursor, ...document }) => document),
+    readCount: result.readCount,
+    limitReached: result.limitReached,
+  };
+}
+
+async function readGroup(group: string, dateField: string, start: Date, end: Date): Promise<ReadResult> {
+  return readPaged(sourceDb.collectionGroup(group), dateField, start, end, true);
+}
+
+// トップレベルコレクションを日付範囲で読む。
+async function readCollection(name: string, dateField: string, start: Date, end: Date): Promise<ReadResult> {
+  return readPaged(sourceDb.collection(name), dateField, start, end, false);
 }
 
 async function readUsers(ids: string[]) {
@@ -107,24 +137,48 @@ function countRejects(readCount: number, acceptedCount: number, source: string, 
 }
 
 // 指定した [start, end) の24時間窓を1回分同期する。
-async function syncWindow(start: Date, end: Date) {
-  const [visitDocuments, chekiDocuments, shiftDocuments, paymentDocuments, purchaseDocuments, presentDocuments, userPaymentDocuments] = await Promise.all([
+async function syncWindow(start: Date, end: Date): Promise<{ degraded: Array<{ source: string; reasonCode: string; message: string }> }> {
+  // 必須ソース: 失敗したら窓ごと失敗させる（欠けたまま成功にしない）。
+  const [visitsRead, chekiRead, shiftsRead, paymentsRead, purchaseRead] = await Promise.all([
     readGroup("userRecordVisits", "enterDateTime", start, end),
     readGroup("userAlbum", "date", start, end),
     readGroup("workshifts", "openTime", start, end),
     readCollection("payments", "requestDate", start, end),
     readCollection("purchaseLog", "confirmPurchaseTime", start, end),
-    // プレゼントは本番に collection group インデックスが必要。未作成でも他の同期を止めないよう握りつぶす。
-    readGroup("userRecordPresents", "presentDateTime", start, end).catch((error) => {
-      console.warn(`PRESENTS_SKIPPED ${(error as Error).message}`);
-      return [] as SourceDocument[];
-    }),
-    // 全時代の課金台帳。userPayments/paymentDate の COLLECTION_GROUP 昇順インデックス（除外設定）が必要。
-    readGroup("userPayments", "paymentDate", start, end).catch((error) => {
-      console.warn(`USERPAYMENTS_SKIPPED ${(error as Error).message}`);
-      return [] as SourceDocument[];
-    }),
   ]);
+
+  // 任意ソース: 本番に collection group インデックスが必要。取得できない場合は
+  // 空配列で「0件」と偽らず、degraded として記録し最終的にジョブを失敗させる。
+  const degraded: Array<{ source: string; reasonCode: string; message: string }> = [];
+  const optional = async (source: string, run: () => Promise<ReadResult>): Promise<ReadResult> => {
+    try {
+      return await run();
+    } catch (error) {
+      degraded.push({ source, reasonCode: "SOURCE_UNAVAILABLE", message: (error as Error).message });
+      console.error(JSON.stringify({ degraded: { source, reasonCode: "SOURCE_UNAVAILABLE", message: (error as Error).message } }));
+      return { documents: [], readCount: 0, limitReached: false };
+    }
+  };
+  const [presentsRead, userPaymentsRead] = await Promise.all([
+    optional("userRecordPresents", () => readGroup("userRecordPresents", "presentDateTime", start, end)),
+    optional("userPayments", () => readGroup("userPayments", "paymentDate", start, end)),
+  ]);
+
+  const reads = { visits: visitsRead, cheki: chekiRead, shifts: shiftsRead, payments: paymentsRead, purchase: purchaseRead, presents: presentsRead, userPayments: userPaymentsRead };
+  // 上限到達＝取りこぼし。無言で欠落させず、窓を失敗させる。
+  const truncated = Object.entries(reads).filter(([, r]) => r.limitReached).map(([name]) => name);
+  if (truncated.length) {
+    throw new Error(`取得件数が上限(MAX_DOCUMENTS=${config.maxDocuments})に達しました: ${truncated.join(", ")}。期間を分割するか上限を引き上げてください`);
+  }
+
+  const visitDocuments = visitsRead.documents;
+  const chekiDocuments = chekiRead.documents;
+  const shiftDocuments = shiftsRead.documents;
+  const paymentDocuments = paymentsRead.documents;
+  const purchaseDocuments = purchaseRead.documents;
+  const presentDocuments = presentsRead.documents;
+  const userPaymentDocuments = userPaymentsRead.documents;
+
   // 課金者(userPayments の親)も含めて users を読む。テストユーザー除外を課金にも効かせ、
   // ご帰宅が無く課金だけあるユーザーも customers_raw に載せるため。
   const userIds = [...new Set([...visitDocuments, ...chekiDocuments, ...userPaymentDocuments].map((document) => document.parentId).filter((id): id is string => Boolean(id)))];
@@ -172,6 +226,8 @@ async function syncWindow(start: Date, end: Date) {
     accepted: { customers: customers.length, visits: visits.length, cheki: cheki.length, shifts: shifts.length, payments: payments.length, presents: presents.length },
     rejected: rejects,
   }));
+
+  return { degraded };
 }
 
 // maidWorkReport（メイド名簿＋月次実績）を全件スナップショット同期する。
@@ -279,20 +335,32 @@ if (backfillFrom || (Number.isInteger(backfillDays) && backfillDays > 0)) {
 // 窓ごとに実行。1窓失敗しても残りは続行し、最後にまとめて報告する（大量バックフィルの耐障害性）。
 let failedWindows = 0;
 let windowIndex = 0;
+const degradedSources = new Set<string>();
 for (const [windowStart, windowEnd] of windows) {
   windowIndex += 1;
   // 途中でタイムアウトしても、どこまで進んだかログで分かるようにする。
   if (windows.length > 1) console.info(`WINDOW_PROGRESS ${windowIndex}/${windows.length} ${windowStart.toISOString().slice(0, 10)}`);
   try {
     if (windows.length > 1) console.info(`WINDOW ${windowStart.toISOString()} .. ${windowEnd.toISOString()}`);
-    await syncWindow(windowStart, windowEnd);
+    const outcome = await syncWindow(windowStart, windowEnd);
+    for (const item of outcome.degraded) degradedSources.add(item.source);
   } catch (error) {
     failedWindows += 1;
     const err = error as { message?: string };
     console.error(`WINDOW_FAILED ${windowStart.toISOString()} .. ${windowEnd.toISOString()} : ${err?.message}`);
   }
 }
-if (failedWindows > 0) {
-  console.error(`バックフィル完了: ${failedWindows}/${windows.length} 窓が失敗`);
-  if (failedWindows === windows.length) process.exit(1);
+// 一部の窓だけ失敗した状態を「成功」で終えると、欠損に気づけないまま
+// Scheduler が次回を走らせてしまう。1窓でも失敗したら非0で終了する。
+const status = failedWindows > 0 ? "failed" : degradedSources.size > 0 ? "degraded" : "ok";
+console.info(JSON.stringify({
+  run: { status, windows: windows.length, failedWindows, degradedSources: [...degradedSources] },
+}));
+if (status !== "ok") {
+  console.error(
+    failedWindows > 0
+      ? `同期失敗: ${failedWindows}/${windows.length} 窓が失敗しました`
+      : `同期は degraded です: ${[...degradedSources].join(", ")} を取得できませんでした`,
+  );
+  process.exit(1);
 }

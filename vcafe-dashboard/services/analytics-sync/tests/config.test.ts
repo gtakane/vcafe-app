@@ -15,7 +15,9 @@ const valid = {
 test("loads a bounded read-only sync config in dry-run mode by default", () => {
   const config = loadSyncConfig(valid);
   assert.equal(config.dryRun, true);
-  assert.equal(config.maxDocuments, 5000);
+  // MAX_DOCUMENTS は「1ソース・1窓あたりの総上限」。1回のクエリ件数は PAGE_SIZE で別管理する。
+  assert.equal(config.maxDocuments, 50000);
+  assert.equal(config.pageSize, 2000);
 });
 
 test("uses a safe 90-minute lookback when a scheduler does not pass explicit dates", () => {
@@ -35,4 +37,15 @@ test("refuses to use the production project as the analytics project", () => {
 
 test("refuses a window longer than 24 hours", () => {
   assert.throws(() => loadSyncConfig({ ...valid, SYNC_START: "2026-07-19T14:59:59.000Z" }), /24時間/);
+});
+
+test("PAGE_SIZE と MAX_DOCUMENTS は独立して指定できる", () => {
+  const config = loadSyncConfig({ ...valid, PAGE_SIZE: "500", MAX_DOCUMENTS: "120000" });
+  assert.equal(config.pageSize, 500);
+  assert.equal(config.maxDocuments, 120000);
+});
+
+test("PAGE_SIZE は範囲外を拒否する", () => {
+  assert.throws(() => loadSyncConfig({ ...valid, PAGE_SIZE: "0" }), /PAGE_SIZE/);
+  assert.throws(() => loadSyncConfig({ ...valid, PAGE_SIZE: "20000" }), /PAGE_SIZE/);
 });
