@@ -5,7 +5,7 @@ import { buildTrend, customerRows, filterData, summarize } from "@/lib/analytics
 import type { AnalyticsData, AttendanceSubmission, Customer, Granularity, Maid, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Shift, Viewer } from "@/lib/types";
 import type { GrowthMetrics } from "@/lib/growth";
 // 座席定数はサーバー依存の無い metrics から取る（growth は BigQuery を読み込むため）。
-import { mergedStayMinutes, SEATS_PER_MAID } from "@/lib/metrics";
+import { mergedStayMinutes, SEATS_PER_MAID, shiftActualHours } from "@/lib/metrics";
 import LogoutButton from "@/components/logout-button";
 
 type View = "overview" | "maids" | "growth" | "users" | "relations" | "attendance";
@@ -692,12 +692,14 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
           </div>
           <VisitLogPanel start={start} end={end} maidId={viewer.role === "maid" ? viewer.maidId || "" : logMaidId} hideMaid exportName={`visit-log_${logMaidId || viewer.maidId || "me"}_${start}_${end}.csv`}
             serveMinutes={(() => {
-              // 選択メイドの実お給仕時間（打刻ベース）。延べ滞在との比較用に並記する。
+              // 選択メイドのお給仕時間。未打刻のシフトも予定時刻で補完する
+              // （shiftActualHours = core.py 準拠。ダッシュボードの「実働時間」と同じ集計）。
+              // 打刻のある行だけを足すと未打刻分が丸ごと欠落し、稼働率が過大になる。
               const id = viewer.role === "maid" ? viewer.maidId || "" : logMaidId;
               if (!id) return null;
               return data.shifts
-                .filter((s) => s.maidId === id && s.actualStart && s.actualEnd)
-                .reduce((acc, s) => acc + Math.max(0, (new Date(s.actualEnd!).getTime() - new Date(s.actualStart!).getTime()) / 60000), 0);
+                .filter((s) => s.maidId === id)
+                .reduce((acc, s) => acc + shiftActualHours(s) * 60, 0);
             })()} />
         </section>}
       </>}
