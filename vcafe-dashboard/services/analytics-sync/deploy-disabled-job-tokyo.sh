@@ -37,7 +37,7 @@ gcloud run jobs deploy "${JOB_NAME}" \
   --tasks=1 \
   --parallelism=1 \
   --max-retries=0 \
-  --task-timeout=900s \
+  --task-timeout=3600s \
   --cpu=1 \
   --memory=512Mi \
   --env-vars-file="services/analytics-sync/disabled.env.yaml" \

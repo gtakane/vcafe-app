@@ -153,6 +153,8 @@ async function syncAllUsers() {
     skipped += documents.length - rows.length; // テストユーザーは除外済み
     await insertRows("customers_raw", rows.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: null })));
     total += rows.length;
+    // 途中でタイムアウトしても、どこまで進んだかログで分かるようにする。
+    console.info(`ALL_USERS_PROGRESS synced=${total}`);
     cursor = snapshot.docs[snapshot.docs.length - 1];
     if (snapshot.size < 1000) break;
   }
@@ -199,7 +201,11 @@ if (backfillFrom || (Number.isInteger(backfillDays) && backfillDays > 0)) {
 
 // 窓ごとに実行。1窓失敗しても残りは続行し、最後にまとめて報告する（大量バックフィルの耐障害性）。
 let failedWindows = 0;
+let windowIndex = 0;
 for (const [windowStart, windowEnd] of windows) {
+  windowIndex += 1;
+  // 途中でタイムアウトしても、どこまで進んだかログで分かるようにする。
+  if (windows.length > 1) console.info(`WINDOW_PROGRESS ${windowIndex}/${windows.length} ${windowStart.toISOString().slice(0, 10)}`);
   try {
     if (windows.length > 1) console.info(`WINDOW ${windowStart.toISOString()} .. ${windowEnd.toISOString()}`);
     await syncWindow(windowStart, windowEnd);

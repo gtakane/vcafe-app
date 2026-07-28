@@ -36,7 +36,7 @@ q "SELECT COUNT(*) AS presents FROM \`${PROJECT_ID}.${DS}.presents_current\`"
 
 echo
 echo "== 4) 課金ログ（Webstore/アプリ内課金） =="
-q "SELECT channel, COUNT(*) AS rows, ROUND(SUM(amount)) AS yen FROM \`${PROJECT_ID}.${DS}.payments_current\` GROUP BY channel"
+q "SELECT channel, COUNT(*) AS row_count, ROUND(SUM(amount)) AS yen FROM \`${PROJECT_ID}.${DS}.payments_current\` GROUP BY channel"
 
 echo
 echo "== 5) customers_current ビューが新列を返せるか（ビューが古いと新項目が全て空になる） =="
@@ -53,7 +53,7 @@ if missing: print('   ★ ビューが古いです。apply-schema.sh を実行�
 
 echo
 echo "== 6) customers_raw に実データが入っているか =="
-q "SELECT COUNT(*) AS rows, COUNT(DISTINCT id) AS users, COUNTIF(gender IS NOT NULL) AS with_gender, COUNTIF(lastPaymentAt IS NOT NULL) AS with_last_payment, MIN(DATE(registeredAt)) AS oldest_registration FROM \`${PROJECT_ID}.${DS}.customers_raw\`"
+q "SELECT COUNT(*) AS row_count, COUNT(DISTINCT id) AS users, COUNTIF(gender IS NOT NULL) AS with_gender, COUNTIF(lastPaymentAt IS NOT NULL) AS with_last_payment, MIN(DATE(registeredAt)) AS oldest_registration FROM \`${PROJECT_ID}.${DS}.customers_raw\`"
 
 echo
 echo "※ 1)で明細列が「なし」→ apply-schema.sh を実行してから再バックフィル"
