@@ -4,6 +4,8 @@ import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { loadSyncConfig } from "./config.ts";
 import { fetchAllPages, type PageCursor } from "./paging.ts";
 import { buildSyncWindows } from "./windows.ts";
+import { assertRejectRate, mapSafely, type RejectEntry } from "./safe-map.ts";
+import { validateRows } from "./row-validation.ts";
 import { buildMaidDirectory, mapCheki, pseudonymizeCustomerId, recordKeyOf, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
@@ -107,7 +109,15 @@ function rowInsertId(row: object): string {
 // 行の形はテーブルごとに異なるので object[] で受ける。
 async function insertRows(tableName: string, rows: object[]) {
   if (!rows.length || config.dryRun) return;
-  const rawRows = rows.map((row) => ({ insertId: rowInsertId(row), json: row }));
+  // manifest（schema.sql 由来）と突き合わせて挿入前に検証する。
+  // 不正行を混ぜると ignoreUnknownValues:false によりバッチ全体が失敗するため、
+  // 該当行だけを理由つきで除外する。生の値はログに出さない。
+  const { valid, rejected } = validateRows(tableName, rows as Array<Record<string, unknown>>, (rejection) => {
+    console.warn(JSON.stringify({ rowRejected: rejection }));
+  });
+  if (rejected > 0) console.warn(JSON.stringify({ validation: { table: tableName, rejected, total: rows.length } }));
+  if (!valid.length) return;
+  const rawRows = valid.map((row) => ({ insertId: rowInsertId(row), json: row }));
   try {
     await bigquery.dataset(config.dataset).table(tableName).insert(rawRows, { raw: true, ignoreUnknownValues: false });
   } catch (error) {
@@ -246,10 +256,20 @@ async function syncWindow(start: Date, end: Date, windowKind = "incremental"): P
   // メイド解決表は名簿(maidWorkReport)から作る。同期窓に含まれるシフトだけでは
   // 19時開始シフト＋翌1時訪問のようなケースを解決できず、nickname:* へ分裂するため。
   const maidMap = await loadMaidDirectory();
-  const customers = userDocuments.map((document) => mapUser(document, config.hmacSecret)).filter((row): row is NonNullable<typeof row> => Boolean(row));
-  const visits = visitDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapVisit(document, config.hmacSecret, maidMap)).filter((row): row is NonNullable<typeof row> => Boolean(row));
-  const cheki = chekiDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapCheki(document, config.hmacSecret, maidMap, syncedAt)).filter((row): row is NonNullable<typeof row> => Boolean(row));
-  const shifts = shiftDocuments.map((document) => mapShift(document, maidMap, config.hmacSecret)).filter((row): row is NonNullable<typeof row> => Boolean(row));
+  // 変換は mapSafely 経由で行う。1件の壊れた文書で窓全体を落とさないため。
+  const rejectEntries: RejectEntry[] = [];
+  const onReject = (entry: RejectEntry) => rejectEntries.push(entry);
+  const safe = <T>(documents: SourceDocument[], mapper: (d: SourceDocument) => T | null, source: string) =>
+    mapSafely(documents, mapper, { source, secret: config.hmacSecret, onReject });
+
+  const customersResult = safe(userDocuments, (d) => mapUser(d, config.hmacSecret), "users");
+  const visitsResult = safe(visitDocuments.filter((d) => !excludedUsers.has(d.parentId || "")), (d) => mapVisit(d, config.hmacSecret, maidMap), "userRecordVisits");
+  const chekiResult = safe(chekiDocuments.filter((d) => !excludedUsers.has(d.parentId || "")), (d) => mapCheki(d, config.hmacSecret, maidMap, syncedAt), "userAlbum");
+  const shiftsResult = safe(shiftDocuments, (d) => mapShift(d, maidMap, config.hmacSecret), "workshifts");
+  const customers = customersResult.accepted;
+  const visits = visitsResult.accepted;
+  const cheki = chekiResult.accepted;
+  const shifts = shiftsResult.accepted;
   // 課金ログ: userPayments（全時代の台帳・実払い円）を正とし、
   // 旧2ソース(payments/purchaseLog)も検証用に raw へ残す（集計はビュー側で userPayments に限定）。
   const payments = [
@@ -258,10 +278,19 @@ async function syncWindow(start: Date, end: Date, windowKind = "incremental"): P
     ...userPaymentDocuments.filter((document) => !excludedUsers.has(document.parentId || ""))
       .map((document) => mapUserPayment(document, config.hmacSecret)),
   ].filter((row): row is NonNullable<typeof row> => Boolean(row));
-  const presents = presentDocuments
-    .filter((document) => !excludedUsers.has(document.parentId || ""))
-    .map((document) => mapPresent(document, config.hmacSecret, maidMap))
-    .filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const presentsResult = safe(presentDocuments.filter((d) => !excludedUsers.has(d.parentId || "")), (d) => mapPresent(d, config.hmacSecret, maidMap), "userRecordPresents");
+  const presents = presentsResult.accepted;
+
+  // 棄却率が高い＝ソース側の形が変わった可能性。静かに欠損させず窓を失敗させる。
+  // 既定20%。REJECT_RATE_THRESHOLD で調整できる。
+  const rejectThreshold = Number(process.env.REJECT_RATE_THRESHOLD || 0.2);
+  assertRejectRate([
+    { source: "userRecordVisits", ...visitsResult },
+    { source: "userAlbum", ...chekiResult },
+    { source: "workshifts", ...shiftsResult },
+    { source: "userRecordPresents", ...presentsResult },
+    { source: "users", ...customersResult },
+  ], rejectThreshold);
 
   await Promise.all([
     // customers は取得済みの updateTime を捨てずに保持する（旧実装は null 固定だった）。
@@ -313,12 +342,16 @@ async function syncWindow(start: Date, end: Date, windowKind = "incremental"): P
       limitReached: false, status: degraded.some((d) => d.source === "userRecordPresents") ? "degraded" : runStatus,
       errorCode: degraded.find((d) => d.source === "userRecordPresents")?.reasonCode ?? null, startedAt, completedAt },
   ]);
-  await recordRejects(runId, [
-    { source: "userRecordVisits", reasonCode: "UNRESOLVED_MAID_OR_INVALID", count: rejects.visits },
-    { source: "userAlbum", reasonCode: "UNRESOLVED_MAID_OR_INVALID", count: rejects.cheki },
-    { source: "workshifts", reasonCode: "UNRESOLVED_MAID_OR_INVALID", count: rejects.shifts },
-    { source: "userRecordPresents", reasonCode: "UNRESOLVED_MAID_OR_INVALID", count: rejects.presents },
-  ]);
+  // 理由コード別に集計して記録する（生データ・UID・パスは含めない）。
+  const rejectCounts = new Map<string, number>();
+  for (const entry of rejectEntries) {
+    const key = `${entry.source}|${entry.reasonCode}`;
+    rejectCounts.set(key, (rejectCounts.get(key) || 0) + 1);
+  }
+  await recordRejects(runId, [...rejectCounts.entries()].map(([key, count]) => {
+    const [source, reasonCode] = key.split("|");
+    return { source, reasonCode, count };
+  }));
 
   console.info(JSON.stringify({
     dryRun: config.dryRun,
