@@ -23,7 +23,10 @@ case "${sub}" in
     current="$(cat "${STATE_FILE}" 2>/dev/null || echo "unknown-revision")"
     case "${fmt}" in
       json)
-        printf '{"status":{"url":"https://mock.example.com","traffic":[{"revisionName":"%s","percent":100}]}}\n' "${current}"
+        # 本番と同じく、100%トラフィックのリビジョンにも過去のpinTag由来の
+        # Firebase管理タグ（fh-*）が残っている状態を再現する。
+        # このタグの有無で「現在のリビジョン」判定を誤らないことを検証するため。
+        printf '{"status":{"url":"https://mock.example.com","traffic":[{"revisionName":"%s","percent":100,"tag":"fh-legacy-tag"},{"revisionName":"some-old-tagged-revision","tag":"fh-another-legacy-tag"}]}}\n' "${current}"
         ;;
       "value(status.url)")
         echo "https://mock.example.com"

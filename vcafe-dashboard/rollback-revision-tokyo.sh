@@ -48,7 +48,7 @@ CURRENT_REVISION="$("${DESCRIBE[@]}" --format='json' | python3 -c "
 import json,sys
 data=json.load(sys.stdin)
 for t in data.get('status',{}).get('traffic',[]):
-    if t.get('percent') == 100 and not t.get('tag'):
+    if t.get('percent') == 100:
         print(t.get('revisionName',''))
         break
 ")"
