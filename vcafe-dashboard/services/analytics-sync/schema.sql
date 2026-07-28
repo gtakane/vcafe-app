@@ -68,6 +68,36 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.visits_raw` (
 PARTITION BY DATE(`at`)
 CLUSTER BY maidId, customerId;
 
+-- メイド個別ログ用の明細列（既存テーブルにも後から追加できるよう ADD COLUMN IF NOT EXISTS）。
+ALTER TABLE `PROJECT_ID.DATASET_ID.visits_raw`
+  ADD COLUMN IF NOT EXISTS ticketId STRING,
+  ADD COLUMN IF NOT EXISTS minutes FLOAT64,
+  ADD COLUMN IF NOT EXISTS billedCoin FLOAT64,
+  ADD COLUMN IF NOT EXISTS billedRewardPoint FLOAT64;
+
+-- users/{id}/userRecordPresents = メイドへのアイテムプレゼント（アイテム使用実績）
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.presents_raw` (
+  id STRING NOT NULL,
+  customerId STRING NOT NULL,
+  maidId STRING NOT NULL,
+  `at` TIMESTAMP NOT NULL,
+  itemName STRING,
+  category STRING,
+  quantity FLOAT64,
+  variationName STRING,
+  syncedAt TIMESTAMP NOT NULL
+)
+PARTITION BY DATE(`at`)
+CLUSTER BY maidId, customerId;
+
+CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.presents_current` AS
+SELECT * EXCEPT(row_number, syncedAt)
+FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY syncedAt DESC) AS row_number
+  FROM `PROJECT_ID.DATASET_ID.presents_raw`
+)
+WHERE row_number = 1;
+
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.cheki_raw` (
   id STRING NOT NULL,
   customerId STRING NOT NULL,

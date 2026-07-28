@@ -77,7 +77,7 @@ test("mapPurchase: アプリ内課金を正規化する（コイン数を保持�
     confirmPurchaseTime: { toDate: () => new Date("2025-11-18T16:54:21.535Z") },
   } }, "secret-secret-secret-secret-1234")!;
   assert.equal(row.coin, 500);
-  assert.equal(row.amount, 0); // 円建て金額は保持していない
+  assert.equal(row.amount, 700); // 本番に円額が無いため 500ac × 1.4円 で換算する
   assert.equal(row.channel, "inapp");
   assert.equal(row.status, "succeeded");
 });

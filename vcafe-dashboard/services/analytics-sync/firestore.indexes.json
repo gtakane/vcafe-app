@@ -19,6 +19,14 @@
       ]
     },
     {
+      "collectionGroup": "userRecordPresents",
+      "fieldPath": "presentDateTime",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    },
+    {
       "collectionGroup": "workshifts",
       "fieldPath": "openTime",
       "indexes": [

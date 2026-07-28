@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { firestoreTimestampToIso, mapFirestoreUser } from "../../../lib/user-mapping.ts";
-import { classifyVisit, visitRevenue, visitWeight } from "../../../lib/metrics.ts";
-import type { Customer, Shift, Visit } from "../../../lib/types.ts";
+import { classifyVisit, COIN_TO_YEN, DEFAULT_INITIAL_TIME, visitRevenue, visitWeight } from "../../../lib/metrics.ts";
+import type { Customer, Present, Shift, Visit } from "../../../lib/types.ts";
 
 export interface SourceDocument {
   id: string;
@@ -54,8 +54,32 @@ export function mapVisit(document: SourceDocument, secret: string, maidIdsByNick
   // 分類・収益・重みは lib/metrics.ts（core.py と一致する単一の正典）に委譲する。
   const type = classifyVisit(ticketId, roomType);
   const revenue = visitRevenue(type, ticketId, billedCoin, billedReward);
-  const weight = visitWeight(numberValue(document.data.initialTime) || undefined);
-  return { id: document.id, at, maidId: maidId(document, maidIdsByNickname), customerId: pseudonymizeCustomerId(document.parentId, secret), type, revenue, cheki: 0, weight };
+  const minutes = numberValue(document.data.initialTime) || DEFAULT_INITIAL_TIME;
+  const weight = visitWeight(minutes);
+  return {
+    id: document.id, at, maidId: maidId(document, maidIdsByNickname),
+    customerId: pseudonymizeCustomerId(document.parentId, secret),
+    type, revenue, cheki: 0, weight,
+    // 明細表示用（どのチケットで何分、コイン払いか）。
+    ticketId, minutes, billedCoin, billedRewardPoint: billedReward,
+  };
+}
+
+// users/{id}/userRecordPresents/{id} = メイドへのアイテムプレゼント（アイテム使用実績）。
+export function mapPresent(document: SourceDocument, secret: string, maidIdsByNickname: Map<string, string>): Present | null {
+  if (!document.parentId) return null;
+  const at = firestoreTimestampToIso(document.data.presentDateTime);
+  if (!at) return null;
+  return {
+    id: document.id,
+    customerId: pseudonymizeCustomerId(document.parentId, secret),
+    maidId: maidId(document, maidIdsByNickname),
+    at,
+    itemName: String(document.data.itemName || "").trim() || "アイテム",
+    category: String(document.data.category || ""),
+    quantity: numberValue(document.data.quantity) || 1,
+    variationName: String(document.data.variationName || ""),
+  };
 }
 
 export function mapCheki(document: SourceDocument, secret: string, maidIdsByNickname: Map<string, string>, syncedAt: string): ChekiRow | null {
@@ -122,7 +146,8 @@ export function mapPurchase(document: SourceDocument, secret: string): PaymentRo
     id: document.id,
     customerId: pseudonymizeCustomerId(userId, secret),
     at,
-    amount: 0,
+    // アプリ内課金は円額を保持していないため、コイン数 × 1.4円 で円換算する（COIN_TO_YEN）。
+    amount: Math.round(numberValue(document.data.coinSendToChargeCoin) * COIN_TO_YEN),
     coin: numberValue(document.data.coinSendToChargeCoin),
     channel: "inapp",
     productId: String(document.data.productId || ""),

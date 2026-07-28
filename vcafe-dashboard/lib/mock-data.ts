@@ -60,6 +60,9 @@ for (let day = 1; day <= 21; day += 1) {
     const type: Visit["type"] = kind === 0 ? "trial" : kind === 1 ? "reservation" : "paid";
     // initialTime を擬似的に変化させ、滞在40分相当(=重み2)を混在させる。
     const initialTime = i % 4 === 0 ? 40 : 20;
+    // 支払い手段を混在させる（コイン払い / チケット / お試し / 予約）。
+    const ticketId = type === "trial" ? "trial10minutes" : type === "reservation" ? "ATCOIN" : i % 3 === 0 ? "gokitaku30minutes" : "ATCOIN";
+    const usesCoin = ticketId === "ATCOIN" && type === "paid";
     visits.push({
       id: `visit-${visitId++}`,
       at: iso(day, 19 + (i % 6), (i * 11) % 60),
@@ -69,6 +72,10 @@ for (let day = 1; day <= 21; day += 1) {
       revenue: type === "reservation" ? 3920 : type === "paid" ? 840 + (i % 3) * 120 : 0,
       cheki: (day + i) % 4 === 0 ? 1 : 0,
       weight: visitWeight(initialTime),
+      ticketId,
+      minutes: initialTime,
+      billedCoin: usesCoin ? 600 + (i % 3) * 100 : 0,
+      billedRewardPoint: usesCoin && i % 5 === 0 ? 200 : 0,
     });
   }
 }

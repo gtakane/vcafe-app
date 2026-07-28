@@ -1,0 +1,77 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { buildMaidVisitLogs, paymentLabel, ticketLabel, typeLabel } from "../lib/maid-visits.ts";
+import type { Visit } from "../lib/types.ts";
+
+const maids = [{ id: "maid-01", name: "こはる" }];
+const customers = [{ id: "usr-001", name: "あおい" }];
+
+const visit = (over: Partial<Visit> = {}): Visit => ({
+  id: "v1", at: "2026-07-27T11:00:00Z", maidId: "maid-01", customerId: "usr-001",
+  type: "paid", revenue: 840, cheki: 0, weight: 1,
+  ticketId: "ATCOIN", minutes: 30, billedCoin: 600, billedRewardPoint: 0, ...over,
+});
+
+test("paymentLabel: 支払い手段を判定する", () => {
+  assert.equal(paymentLabel("paid", "ATCOIN", 600, 0), "あっとコイン");
+  assert.equal(paymentLabel("paid", "ATCOIN", 0, 500), "リワードポイント");
+  assert.equal(paymentLabel("paid", "ATCOIN", 300, 200), "あっとコイン+リワードP");
+  assert.equal(paymentLabel("paid", "gokitaku30minutes", 0, 0), "チケット");
+  assert.equal(paymentLabel("trial", "trial10minutes", 0, 0), "無料(お試し)");
+  assert.equal(paymentLabel("reservation", "ATCOIN", 0, 0), "予約");
+});
+
+test("ticketLabel/typeLabel: 日本語表示に変換する", () => {
+  assert.equal(ticketLabel("ATCOIN"), "あっとコイン");
+  assert.equal(ticketLabel("gokitaku30minutes"), "ご帰宅30分チケット");
+  assert.equal(ticketLabel("unknownTicket"), "unknownTicket"); // 未知IDはそのまま
+  assert.equal(typeLabel("reservation"), "予約");
+  assert.equal(typeLabel("trial"), "お試し");
+});
+
+test("buildMaidVisitLogs: 明細に滞在時間・チケット・支払い・ユーザー名が入る", () => {
+  const [log] = buildMaidVisitLogs([visit()], maids, customers, []);
+  assert.equal(log.customerName, "あおい");
+  assert.equal(log.maidName, "こはる");
+  assert.equal(log.minutes, 30);
+  assert.equal(log.ticketLabel, "あっとコイン");
+  assert.equal(log.payment, "あっとコイン");
+  assert.equal(log.billedCoin, 600);
+  assert.equal(log.presents, 0);
+});
+
+test("buildMaidVisitLogs: 新しい順に並ぶ", () => {
+  const logs = buildMaidVisitLogs([
+    visit({ id: "old", at: "2026-07-20T11:00:00Z" }),
+    visit({ id: "new", at: "2026-07-27T11:00:00Z" }),
+  ], maids, customers, []);
+  assert.deepEqual(logs.map((l) => l.id), ["new", "old"]);
+});
+
+test("buildMaidVisitLogs: 同じ営業日のプレゼントを紐づけ、複数ご帰宅でも二重計上しない", () => {
+  const presents = [{ customerId: "usr-001", maidId: "maid-01", at: "2026-07-27T13:00:00Z", itemName: "ブレスレット", quantity: 2 }];
+  const logs = buildMaidVisitLogs([
+    visit({ id: "a", at: "2026-07-27T11:00:00Z" }),
+    visit({ id: "b", at: "2026-07-27T14:00:00Z" }),
+  ], maids, customers, presents);
+  const total = logs.reduce((sum, log) => sum + log.presents, 0);
+  assert.equal(total, 2); // 2件のご帰宅があっても合計は2（重複計上しない）
+  assert.equal(logs.filter((l) => l.presents > 0).length, 1);
+  assert.equal(logs.find((l) => l.presents > 0)!.presentNames, "ブレスレット");
+});
+
+test("buildMaidVisitLogs: 深夜1時のご帰宅は前営業日のプレゼントと紐づく", () => {
+  // 07/28 01:00 JST = 営業日 07/27
+  const at = new Date("2026-07-28T01:00:00+09:00").toISOString();
+  const presents = [{ customerId: "usr-001", maidId: "maid-01", at, itemName: "花束", quantity: 1 }];
+  const [log] = buildMaidVisitLogs([visit({ at })], maids, customers, presents);
+  assert.equal(log.presents, 1);
+});
+
+test("buildMaidVisitLogs: 明細列が未同期の古い行でも既定値で表示できる", () => {
+  const legacy = { id: "v0", at: "2025-05-01T11:00:00Z", maidId: "maid-01", customerId: "usr-001", type: "paid", revenue: 840, cheki: 0, weight: 1 } as Visit;
+  const [log] = buildMaidVisitLogs([legacy], maids, customers, []);
+  assert.equal(log.minutes, 20); // DEFAULT_INITIAL_TIME
+  assert.equal(log.ticketLabel, "—");
+  assert.equal(log.billedCoin, 0);
+});

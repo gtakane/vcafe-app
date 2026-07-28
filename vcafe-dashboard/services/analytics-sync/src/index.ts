@@ -2,7 +2,7 @@ import { BigQuery } from "@google-cloud/bigquery";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { loadSyncConfig } from "./config.ts";
-import { buildMaidMap, mapCheki, mapMaidProfile, mapMonthlyReport, mapPayment, mapPurchase, mapShift, mapUser, mapVisit, type SourceDocument } from "./transform.ts";
+import { buildMaidMap, mapCheki, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapVisit, type SourceDocument } from "./transform.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
 process.on("unhandledRejection", (error) => {
@@ -78,12 +78,17 @@ async function insertRows(tableName: string, rows: Array<Record<string, unknown>
 
 // 指定した [start, end) の24時間窓を1回分同期する。
 async function syncWindow(start: Date, end: Date) {
-  const [visitDocuments, chekiDocuments, shiftDocuments, paymentDocuments, purchaseDocuments] = await Promise.all([
+  const [visitDocuments, chekiDocuments, shiftDocuments, paymentDocuments, purchaseDocuments, presentDocuments] = await Promise.all([
     readGroup("userRecordVisits", "enterDateTime", start, end),
     readGroup("userAlbum", "date", start, end),
     readGroup("workshifts", "openTime", start, end),
     readCollection("payments", "requestDate", start, end),
     readCollection("purchaseLog", "confirmPurchaseTime", start, end),
+    // プレゼントは本番に collection group インデックスが必要。未作成でも他の同期を止めないよう握りつぶす。
+    readGroup("userRecordPresents", "presentDateTime", start, end).catch((error) => {
+      console.warn(`PRESENTS_SKIPPED ${(error as Error).message}`);
+      return [] as SourceDocument[];
+    }),
   ]);
   const userIds = [...new Set([...visitDocuments, ...chekiDocuments].map((document) => document.parentId).filter((id): id is string => Boolean(id)))];
   const userDocuments = await readUsers(userIds);
@@ -98,6 +103,10 @@ async function syncWindow(start: Date, end: Date) {
     ...paymentDocuments.map((document) => mapPayment(document, config.hmacSecret)),
     ...purchaseDocuments.map((document) => mapPurchase(document, config.hmacSecret)),
   ].filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const presents = presentDocuments
+    .filter((document) => !excludedUsers.has(document.parentId || ""))
+    .map((document) => mapPresent(document, config.hmacSecret, maidMap))
+    .filter((row): row is NonNullable<typeof row> => Boolean(row));
 
   await Promise.all([
     insertRows("customers_raw", customers.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: null }))),
@@ -105,9 +114,10 @@ async function syncWindow(start: Date, end: Date) {
     insertRows("cheki_raw", cheki),
     insertRows("shifts_raw", shifts.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: shiftDocuments.find((document) => document.id === row.id)?.updatedAt || null }))),
     insertRows("payments_raw", payments.map((row) => ({ ...row, syncedAt }))),
+    insertRows("presents_raw", presents.map((row) => ({ ...row, syncedAt }))),
   ]);
 
-  console.info(JSON.stringify({ dryRun: config.dryRun, window: { start: start.toISOString(), end: end.toISOString() }, counts: { customers: customers.length, visits: visits.length, cheki: cheki.length, shifts: shifts.length, payments: payments.length } }));
+  console.info(JSON.stringify({ dryRun: config.dryRun, window: { start: start.toISOString(), end: end.toISOString() }, counts: { customers: customers.length, visits: visits.length, cheki: cheki.length, shifts: shifts.length, payments: payments.length, presents: presents.length } }));
 }
 
 // maidWorkReport（メイド名簿＋月次実績）を全件スナップショット同期する。

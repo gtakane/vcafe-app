@@ -64,6 +64,45 @@ export interface Visit {
   cheki: number;
   // 滞在時間による重み（core.py: max(1, round(initialTime/20))）。ご帰宅数の集計に使用。
   weight: number;
+  // --- 明細表示用（メイド個別ログ）。未同期の古い行では undefined ---
+  ticketId?: string | null; // 使用チケット（ATCOIN = あっとコイン払い）
+  minutes?: number | null; // 滞在時間(分) = initialTime
+  billedCoin?: number | null; // 消費コイン
+  billedRewardPoint?: number | null; // 消費リワードポイント
+}
+
+// メイドへのアイテムプレゼント（userRecordPresents）。
+export interface Present {
+  id: string;
+  customerId: string;
+  maidId: string;
+  at: string;
+  itemName: string;
+  category: string;
+  quantity: number;
+  variationName: string;
+}
+
+// メイド個別のご帰宅明細（1行 = 1ご帰宅）。
+export interface MaidVisitLog {
+  id: string;
+  at: string;
+  customerId: string;
+  customerName: string;
+  maidId: string;
+  maidName: string;
+  type: Visit["type"];
+  typeLabel: string;
+  minutes: number;
+  ticketId: string;
+  ticketLabel: string;
+  payment: string; // "あっとコイン" / "チケット" / "予約" / "無料"
+  billedCoin: number;
+  billedRewardPoint: number;
+  revenue: number;
+  cheki: number;
+  presents: number;
+  presentNames: string;
 }
 
 export interface Shift {

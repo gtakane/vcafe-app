@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { buildTrend, customerRows, filterData, summarize } from "@/lib/analytics";
-import type { AnalyticsData, AttendanceSubmission, Granularity, MaidMonthlyReport, MaidReportsResult, Viewer } from "@/lib/types";
+import type { AnalyticsData, AttendanceSubmission, Customer, Granularity, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Viewer } from "@/lib/types";
 import type { GrowthMetrics } from "@/lib/growth";
 import LogoutButton from "@/components/logout-button";
 
@@ -109,7 +109,7 @@ function MaidReports({ viewer }: { viewer: Viewer }) {
   const monthLabel = (m: string) => (m ? `${m.slice(0, 4)}年${m.slice(4, 6)}月` : "");
   return <section className="panel table-panel">
     <div className="panel-head">
-      <div><p className="eyebrow">MAID PERFORMANCE</p><h2>{viewer.role === "admin" ? "メイド実績" : "あなたの実績"}</h2><small>本番 maidWorkReport の月次実績</small></div>
+      <div><p className="eyebrow">MAID PERFORMANCE</p><h2>{viewer.role === "admin" ? "メイド実績（月次）" : "あなたの実績（月次）"}</h2><small>本番 maidWorkReport の月次実績</small></div>
       <div style={{ display: "flex", gap: ".6rem", alignItems: "center" }}>
         <label>月 <select value={month} onChange={(e) => setMonth(e.target.value)}>{(data?.months || []).map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select></label>
         <button className="secondary" onClick={() => downloadReportCsv(rows, month)} disabled={!rows.length}>CSV出力</button>
@@ -162,87 +162,223 @@ const CUSTOMER_COLUMNS: Array<{ key: keyof CustomerRow; label: string; kind: "te
   { key: "lastVisit", label: "最終ご帰宅", kind: "text" },
 ];
 
-function CustomerDatabase({ rows, start, end, ranks, onExport }: { rows: CustomerRow[]; start: string; end: string; ranks: string[]; onExport: (name: string, data: Array<Array<string | number>>) => void }) {
+// ご帰宅明細（メイド個別ログ／ユーザー個別ログ共通）。
+const LOG_COLUMNS: Array<{ key: keyof MaidVisitLog; label: string; align?: "right" }> = [
+  { key: "at", label: "日時" },
+  { key: "customerName", label: "ユーザー" },
+  { key: "maidName", label: "メイド" },
+  { key: "minutes", label: "滞在(分)", align: "right" },
+  { key: "typeLabel", label: "種別" },
+  { key: "ticketLabel", label: "使用チケット" },
+  { key: "payment", label: "支払い" },
+  { key: "billedCoin", label: "消費コイン", align: "right" },
+  { key: "billedRewardPoint", label: "消費RP", align: "right" },
+  { key: "revenue", label: "売上", align: "right" },
+  { key: "cheki", label: "チェキ", align: "right" },
+  { key: "presentNames", label: "アイテム使用" },
+];
+
+const jstDateTime = (value: string) => new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+
+function VisitLogTable({ logs, hideMaid, hideCustomer, onExport, exportName }: { logs: MaidVisitLog[]; hideMaid?: boolean; hideCustomer?: boolean; onExport: (name: string, data: Array<Array<string | number>>) => void; exportName: string }) {
+  const columns = LOG_COLUMNS.filter((c) => !(hideMaid && c.key === "maidName") && !(hideCustomer && c.key === "customerName"));
+  const cell = (log: MaidVisitLog, key: keyof MaidVisitLog) => {
+    if (key === "at") return jstDateTime(log.at);
+    if (key === "revenue") return yen.format(log.revenue);
+    if (key === "cheki") return log.cheki ? `${log.cheki}枚` : "—";
+    if (key === "presentNames") return log.presents ? `${log.presentNames}${log.presents > 1 ? ` ×${log.presents}` : ""}` : "—";
+    const value = log[key];
+    return typeof value === "number" ? (value ? number.format(value) : "—") : String(value ?? "—");
+  };
+  const totals = logs.reduce((acc, log) => ({
+    minutes: acc.minutes + log.minutes, revenue: acc.revenue + log.revenue,
+    cheki: acc.cheki + log.cheki, presents: acc.presents + log.presents,
+  }), { minutes: 0, revenue: 0, cheki: 0, presents: 0 });
+  if (!logs.length) return <p className="muted">この期間のご帰宅がありません</p>;
+  return <>
+    <div className="log-summary">
+      <span><b>{number.format(logs.length)}</b>件</span>
+      <span>滞在合計 <b>{number.format(totals.minutes)}</b>分</span>
+      <span>売上 <b>{yen.format(totals.revenue)}</b></span>
+      <span>チェキ <b>{number.format(totals.cheki)}</b>枚</span>
+      <span>アイテム使用 <b>{number.format(totals.presents)}</b></span>
+      <button className="secondary" onClick={() => onExport(exportName, [columns.map((c) => c.label), ...logs.map((log) => columns.map((c) => (c.key === "at" ? jstDateTime(log.at) : String(log[c.key] ?? ""))))])}>CSV出力</button>
+    </div>
+    <div className="table-scroll tall"><table className="freeze-head"><thead><tr>{columns.map((c) => <th key={String(c.key)} style={{ textAlign: c.align || "left", whiteSpace: "nowrap" }}>{c.label}</th>)}</tr></thead><tbody>{logs.map((log) => (
+      <tr key={log.id}>{columns.map((c) => <td key={String(c.key)} style={{ textAlign: c.align || "left", whiteSpace: "nowrap" }}>{cell(log, c.key)}</td>)}</tr>
+    ))}</tbody></table></div>
+  </>;
+}
+
+// 個別ログを取得して表示する（メイド個別／ユーザー個別で共通）。
+function VisitLogPanel({ start, end, maidId, customerId, hideMaid, hideCustomer, exportName }: { start: string; end: string; maidId?: string; customerId?: string; hideMaid?: boolean; hideCustomer?: boolean; exportName: string }) {
+  const [logs, setLogs] = useState<MaidVisitLog[] | null>(null);
+  const [error, setError] = useState("");
+  const downloadCsv = (filename: string, rows: Array<Array<string | number>>) => {
+    const safe = (value: string | number) => { const raw = String(value); const protectedValue = /^[=+\-@]/.test(raw) ? `'${raw}` : raw; return `"${protectedValue.replaceAll('"', '""')}"`; };
+    const blob = new Blob(["﻿" + rows.map((row) => row.map(safe).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url);
+  };
+  useEffect(() => {
+    if (!maidId && !customerId) { setLogs(null); return; }
+    const controller = new AbortController();
+    setLogs(null); setError("");
+    const params = new URLSearchParams({ start, end });
+    if (maidId) params.set("maidId", maidId);
+    if (customerId) params.set("customerId", customerId);
+    fetch(`/api/visit-logs?${params}`, { signal: controller.signal, cache: "no-store" })
+      .then(async (response) => { const body = await response.json(); if (!response.ok) throw new Error(body.error || "ご帰宅明細を取得できませんでした"); setLogs(body.logs || []); })
+      .catch((e) => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "ご帰宅明細を取得できませんでした"); });
+    return () => controller.abort();
+  }, [start, end, maidId, customerId]);
+  if (error) return <p className="error">{error}</p>;
+  if (!maidId && !customerId) return <p className="muted">対象を選択してください</p>;
+  if (!logs) return <p className="muted">読込中…</p>;
+  return <VisitLogTable logs={logs} hideMaid={hideMaid} hideCustomer={hideCustomer} onExport={downloadCsv} exportName={exportName} />;
+}
+
+type CustomerCol = { key: keyof Customer; label: string; kind: "text" | "num" | "money" | "date" | "gender" | "year" };
+
+// ユーザーDBの列。すべて users ドキュメント由来の通算値で、上部の期間フィルタには依存しない。
+const CUSTOMER_DB_COLUMNS: CustomerCol[] = [
+  { key: "name", label: "ユーザー名", kind: "text" },
+  { key: "rank", label: "ランク", kind: "text" },
+  { key: "gender", label: "性別", kind: "gender" },
+  { key: "birthYear", label: "生年", kind: "year" },
+  { key: "registeredAt", label: "登録日", kind: "date" },
+  { key: "lastVisitAt", label: "最終ご帰宅日", kind: "date" },
+  { key: "totalVisitAmount", label: "累計ご帰宅", kind: "num" },
+  { key: "maxConsecutiveVisitDays", label: "最大連続日数", kind: "num" },
+  { key: "paymentCount", label: "課金回数(通算)", kind: "num" },
+  { key: "paymentAmount", label: "課金額(通算)", kind: "money" },
+  { key: "lastPaymentAt", label: "最終課金日", kind: "date" },
+  { key: "purchasedItemQuantity", label: "アイテム購入数", kind: "num" },
+  { key: "purchasedItemCoin", label: "アイテム購入額(コイン)", kind: "num" },
+  { key: "lastPurchasedItemAt", label: "最終アイテム購入日", kind: "date" },
+  { key: "presentAmount", label: "プレゼント回数", kind: "num" },
+  { key: "lastPresentAt", label: "最終プレゼント日", kind: "date" },
+  { key: "coin", label: "コイン残高", kind: "num" },
+  { key: "rewardPoint", label: "リワードP残高", kind: "num" },
+];
+
+const SORTABLE_DB_KEYS = new Set<string>(["registeredAt", "name", "rank", "gender", "birthYear", "lastVisitAt", "lastPaymentAt", "lastPurchasedItemAt", "lastPresentAt", "purchasedItemCoin", "purchasedItemQuantity", "presentAmount", "coin", "rewardPoint", "totalVisitAmount", "maxConsecutiveVisitDays", "paymentCount", "paymentAmount"]);
+
+function CustomerDatabase({ ranks, onExport }: { ranks: string[]; onExport: (name: string, data: Array<Array<string | number>>) => void }) {
   const [query, setQuery] = useState("");
   const [rank, setRank] = useState("");
   const [gender, setGender] = useState("");
   const [paying, setPaying] = useState("");
   const [regFrom, setRegFrom] = useState("");
   const [regTo, setRegTo] = useState("");
-  const [minVisits, setMinVisits] = useState("");
-  const [minSpend, setMinSpend] = useState("");
-  const [sortKey, setSortKey] = useState<keyof CustomerRow>("visits");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // 既定は登録日の古い順（会員の起点から）。
+  const [sortKey, setSortKey] = useState("registeredAt");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [result, setResult] = useState<{ total: number; returned: number; customers: Customer[] } | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<Customer | null>(null);
 
-  const genders = useMemo(() => [...new Set(rows.map((r) => r.gender).filter(Boolean))].sort(), [rows]);
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const minV = Number(minVisits) || 0;
-    const minS = Number(minSpend) || 0;
-    const list = rows.filter((row) => {
-      if (q && !`${row.name} ${row.id}`.toLowerCase().includes(q)) return false;
-      if (rank && row.rank !== rank) return false;
-      if (gender && row.gender !== gender) return false;
-      // 課金あり=期間内の課金 or 過去に課金履歴がある
-      if (paying === "yes" && !(row.paymentCount > 0 || row.lastPaymentAt)) return false;
-      if (paying === "no" && (row.paymentCount > 0 || row.lastPaymentAt)) return false;
-      // 登録日はJSTの暦日(YYYY-MM-DD)で比較。未設定は期間指定時に除外。
-      const reg = row.registeredAt ? row.registeredAt.slice(0, 10) : "";
-      if (regFrom && (!reg || reg < regFrom)) return false;
-      if (regTo && (!reg || reg > regTo)) return false;
-      if (row.visits < minV) return false;
-      if (row.spend < minS) return false;
-      return true;
-    });
-    return list.sort((a, b) => {
-      const av = a[sortKey], bv = b[sortKey];
-      const cmp = typeof av === "number" && typeof bv === "number" ? av - bv : String(av ?? "").localeCompare(String(bv ?? ""), "ja");
-      return sortDir === "asc" ? cmp : -cmp;
-    });
-  }, [rows, query, rank, gender, paying, regFrom, regTo, minVisits, minSpend, sortKey, sortDir]);
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setLoading(true); setError("");
+      try {
+        const params = new URLSearchParams({ sort: sortKey, dir: sortDir, limit: "2000" });
+        if (query.trim()) params.set("q", query.trim());
+        if (rank) params.set("rank", rank);
+        if (gender) params.set("gender", gender);
+        if (paying) params.set("paying", paying);
+        if (regFrom) params.set("regFrom", regFrom);
+        if (regTo) params.set("regTo", regTo);
+        const response = await fetch(`/api/customers?${params}`, { signal: controller.signal, cache: "no-store" });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || "ユーザー一覧を取得できませんでした");
+        setResult(body);
+      } catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "ユーザー一覧を取得できませんでした"); }
+      finally { if (!controller.signal.aborted) setLoading(false); }
+    }, 250);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [query, rank, gender, paying, regFrom, regTo, sortKey, sortDir]);
 
-  const toggleSort = (key: keyof CustomerRow) => {
+  const rows = result?.customers || [];
+  const genders = useMemo(() => [...new Set(rows.map((r) => r.gender).filter(Boolean))].sort() as string[], [rows]);
+  const toggleSort = (key: string) => {
+    if (!SORTABLE_DB_KEYS.has(key)) return;
     if (key === sortKey) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
-    else { setSortKey(key); setSortDir("desc"); }
+    else { setSortKey(key); setSortDir(key === "registeredAt" ? "asc" : "desc"); }
   };
-  const cell = (row: CustomerRow, key: keyof CustomerRow, kind: string) => {
-    const value = row[key];
-    if (kind === "gender") return genderLabel(String(value ?? ""));
-    if (kind === "year") return Number(value) ? String(Number(value)) : "—";
-    if (kind === "money") return yen.format(Number(value));
-    if (kind === "num") return Number(value) ? number.format(Number(value)) : "—";
-    if (kind === "date") return value ? jstDate(String(value)) : "—";
+  const cell = (row: Customer, c: CustomerCol) => {
+    const value = row[c.key];
+    if (c.kind === "gender") return genderLabel(String(value ?? ""));
+    if (c.kind === "year") return Number(value) ? String(Number(value)) : "—";
+    if (c.kind === "money") return yen.format(Number(value) || 0);
+    if (c.kind === "num") return Number(value) ? number.format(Number(value)) : "—";
+    if (c.kind === "date") return value ? jstDate(String(value)) : "—";
     return String(value ?? "—");
   };
-  const clearFilters = () => { setQuery(""); setRank(""); setGender(""); setPaying(""); setRegFrom(""); setRegTo(""); setMinVisits(""); setMinSpend(""); };
-  const hasFilter = Boolean(query || rank || gender || paying || regFrom || regTo || minVisits || minSpend);
+  const clearFilters = () => { setQuery(""); setRank(""); setGender(""); setPaying(""); setRegFrom(""); setRegTo(""); };
+  const hasFilter = Boolean(query || rank || gender || paying || regFrom || regTo);
+  const rightAligned = (c: CustomerCol) => c.kind === "num" || c.kind === "money" || c.kind === "year";
 
-  return <section className="panel table-panel">
+  return <>
+    <section className="panel table-panel">
+      <div className="panel-head">
+        <div><p className="eyebrow">CUSTOMER DATABASE</p><h2>ユーザーデータベース</h2><small>{result ? `${number.format(result.total)}名中 ${number.format(rows.length)}名を表示` : "読込中"}・全会員が対象（上部の期間フィルタとは独立）</small></div>
+        <button className="secondary" disabled={!rows.length} onClick={() => onExport(`users_all.csv`, [["会員ID", ...CUSTOMER_DB_COLUMNS.map((c) => c.label)], ...rows.map((r) => [r.id, ...CUSTOMER_DB_COLUMNS.map((c) => (c.kind === "date" ? (r[c.key] ? jstDate(String(r[c.key])) : "") : c.kind === "gender" ? genderLabel(String(r[c.key] ?? "")) : String(r[c.key] ?? "")))])])}>CSV出力</button>
+      </div>
+      <div className="table-filters">
+        <label>検索<input className="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="⌕ 名前・会員ID" /></label>
+        <label>ランク<select value={rank} onChange={(e) => setRank(e.target.value)}><option value="">すべて</option>{ranks.map((r) => <option key={r} value={r}>{r}</option>)}</select></label>
+        <label>性別<select value={gender} onChange={(e) => setGender(e.target.value)}><option value="">すべて</option>{genders.map((g) => <option key={g} value={g}>{genderLabel(g)}</option>)}</select></label>
+        <label>課金<select value={paying} onChange={(e) => setPaying(e.target.value)}><option value="">すべて</option><option value="yes">課金あり</option><option value="no">課金なし</option></select></label>
+        <label>登録日(から)<input type="date" value={regFrom} onChange={(e) => setRegFrom(e.target.value)} /></label>
+        <label>登録日(まで)<input type="date" value={regTo} onChange={(e) => setRegTo(e.target.value)} /></label>
+        {hasFilter && <button className="secondary" onClick={clearFilters}>条件をクリア</button>}
+      </div>
+      {error ? <p className="error">{error}</p> : loading && !result ? <p className="muted">読込中…</p> : rows.length === 0 ? <p className="muted">条件に一致するユーザーがいません</p> :
+      <div className="table-scroll tall"><table className="freeze-col freeze-head"><thead><tr>{CUSTOMER_DB_COLUMNS.map((c) => (
+        <th key={String(c.key)} onClick={() => toggleSort(String(c.key))} title={SORTABLE_DB_KEYS.has(String(c.key)) ? "クリックで並び替え" : undefined} style={{ cursor: SORTABLE_DB_KEYS.has(String(c.key)) ? "pointer" : "default", userSelect: "none", whiteSpace: "nowrap", textAlign: rightAligned(c) ? "right" : "left", color: sortKey === c.key ? "#ef5da8" : undefined }}>{c.label}{sortKey === c.key ? (sortDir === "desc" ? " ▼" : " ▲") : ""}</th>
+      ))}</tr></thead><tbody>{rows.map((row) => (
+        <tr key={row.id} onClick={() => setSelected(row)} style={{ cursor: "pointer" }} title="クリックで個別のご帰宅明細を表示">{CUSTOMER_DB_COLUMNS.map((c) => (
+          <td key={String(c.key)} style={{ whiteSpace: "nowrap", textAlign: rightAligned(c) ? "right" : "left" }}>
+            {c.key === "name" ? <><b>{row.name}</b><small className="id">{row.id}</small></> : c.key === "rank" ? <span className={`text-rank ${row.rank}`}>{row.rank}</span> : cell(row, c)}
+          </td>
+        ))}</tr>
+      ))}</tbody></table></div>}
+    </section>
+    {selected && <CustomerDetail customer={selected} onClose={() => setSelected(null)} />}
+  </>;
+}
+
+// ユーザー個別のドリルダウン（プロフィール＋ご帰宅明細）。既定は直近365日。
+function CustomerDetail({ customer, onClose }: { customer: Customer; onClose: () => void }) {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" }).format(new Date());
+  const yearAgo = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" }).format(new Date(Date.now() - 364 * 86400000));
+  const [start, setStart] = useState(yearAgo);
+  const [end, setEnd] = useState(today);
+  const facts: Array<[string, string]> = [
+    ["ランク", customer.rank],
+    ["性別", genderLabel(String(customer.gender ?? ""))],
+    ["登録日", customer.registeredAt ? jstDate(customer.registeredAt) : "—"],
+    ["最終ご帰宅", customer.lastVisitAt ? jstDate(customer.lastVisitAt) : "—"],
+    ["累計ご帰宅", customer.totalVisitAmount ? `${number.format(customer.totalVisitAmount)}回` : "—"],
+    ["課金(通算)", customer.paymentCount ? `${number.format(customer.paymentCount)}回 / ${yen.format(customer.paymentAmount || 0)}` : "—"],
+    ["最終課金日", customer.lastPaymentAt ? jstDate(customer.lastPaymentAt) : "—"],
+    ["アイテム購入", customer.purchasedItemQuantity ? `${number.format(customer.purchasedItemQuantity)}点 / ${number.format(customer.purchasedItemCoin || 0)}コイン` : "—"],
+    ["プレゼント", customer.presentAmount ? `${number.format(customer.presentAmount)}回` : "—"],
+    ["残高", `${number.format(customer.coin || 0)}コイン / ${number.format(customer.rewardPoint || 0)}RP`],
+  ];
+  return <section className="panel table-panel detail-panel">
     <div className="panel-head">
-      <div><p className="eyebrow">CUSTOMER DATABASE</p><h2>ユーザーデータベース</h2><small>{number.format(filtered.length)}名 / 全{number.format(rows.length)}名・ご帰宅期間 {start}〜{end}</small></div>
-      <button className="secondary" disabled={!filtered.length} onClick={() => onExport(`users_${start}_${end}.csv`, [["会員ID", ...CUSTOMER_COLUMNS.map((c) => c.label)], ...filtered.map((r) => [r.id, ...CUSTOMER_COLUMNS.map((c) => (c.kind === "date" ? (r[c.key] ? jstDate(String(r[c.key])) : "") : c.kind === "gender" ? genderLabel(String(r[c.key] ?? "")) : String(r[c.key] ?? "")))])])}>CSV出力</button>
+      <div><p className="eyebrow">USER DETAIL</p><h2>{customer.name}</h2><small className="id">{customer.id}</small></div>
+      <div style={{ display: "flex", gap: ".6rem", alignItems: "end" }}>
+        <label>開始日<input type="date" value={start} max={end} onChange={(e) => setStart(e.target.value)} /></label>
+        <label>終了日<input type="date" value={end} min={start} onChange={(e) => setEnd(e.target.value)} /></label>
+        <button className="secondary" onClick={onClose}>閉じる</button>
+      </div>
     </div>
-    <div className="table-filters">
-      <label>検索<input className="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="⌕ 名前・会員ID" /></label>
-      <label>ランク<select value={rank} onChange={(e) => setRank(e.target.value)}><option value="">すべて</option>{ranks.map((r) => <option key={r} value={r}>{r}</option>)}</select></label>
-      <label>性別<select value={gender} onChange={(e) => setGender(e.target.value)}><option value="">すべて</option>{genders.map((g) => <option key={g} value={g}>{genderLabel(g)}</option>)}</select></label>
-      <label>課金<select value={paying} onChange={(e) => setPaying(e.target.value)}><option value="">すべて</option><option value="yes">課金あり</option><option value="no">課金なし</option></select></label>
-      <label>登録日(から)<input type="date" value={regFrom} onChange={(e) => setRegFrom(e.target.value)} /></label>
-      <label>登録日(まで)<input type="date" value={regTo} onChange={(e) => setRegTo(e.target.value)} /></label>
-      <label>ご帰宅数 ≧<input type="number" min="0" value={minVisits} onChange={(e) => setMinVisits(e.target.value)} placeholder="0" /></label>
-      <label>利用額 ≧<input type="number" min="0" step="1000" value={minSpend} onChange={(e) => setMinSpend(e.target.value)} placeholder="0" /></label>
-      {hasFilter && <button className="secondary" onClick={clearFilters}>条件をクリア</button>}
-    </div>
-    {filtered.length === 0 ? <p className="muted">条件に一致するユーザーがいません</p> :
-    <div className="table-scroll tall"><table className="freeze-col freeze-head"><thead><tr>{CUSTOMER_COLUMNS.map((c) => (
-      <th key={String(c.key)} onClick={() => toggleSort(c.key)} title="クリックで並び替え" style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap", textAlign: c.kind === "num" || c.kind === "money" || c.kind === "year" ? "right" : "left", color: sortKey === c.key ? "#ef5da8" : undefined }}>{c.label}{sortKey === c.key ? (sortDir === "desc" ? " ▼" : " ▲") : ""}</th>
-    ))}</tr></thead><tbody>{filtered.map((row) => (
-      <tr key={row.id}>{CUSTOMER_COLUMNS.map((c) => (
-        <td key={String(c.key)} style={{ whiteSpace: "nowrap", textAlign: c.kind === "num" || c.kind === "money" || c.kind === "year" ? "right" : "left" }}>
-          {c.key === "name" ? <><b>{row.name}</b><small className="id">{row.id}</small></> : c.key === "rank" ? <span className={`text-rank ${row.rank}`}>{row.rank}</span> : cell(row, c.key, c.kind)}
-        </td>
-      ))}</tr>
-    ))}</tbody></table></div>}
+    <div className="fact-grid">{facts.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>
+    <VisitLogPanel start={start} end={end} customerId={customer.id} hideCustomer exportName={`user-log_${customer.id}_${start}_${end}.csv`} />
   </section>;
 }
 
@@ -327,6 +463,8 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
   const [loadError, setLoadError] = useState("");
   const [submissions, setSubmissions] = useState<AttendanceSubmission[]>([]);
   const [submissionError, setSubmissionError] = useState("");
+  const [maidTab, setMaidTab] = useState<"monthly" | "log">("monthly");
+  const [logMaidId, setLogMaidId] = useState("");
   const [growth, setGrowth] = useState<GrowthMetrics | null>(null);
   const [growthLoading, setGrowthLoading] = useState(false);
   const [growthError, setGrowthError] = useState("");
@@ -415,11 +553,24 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
         <section className="grid-2"><article className="panel"><div className="panel-head"><div><p className="eyebrow">PERFORMANCE TREND</p><h2>ご帰宅数の推移</h2></div><span className="badge">{granularity === "hour" ? "時間別" : granularity === "day" ? "日次" : granularity === "week" ? "週次" : "月次"}</span></div><LineChart points={trend}/></article><article className="panel"><div className="panel-head"><div><p className="eyebrow">CUSTOMER MIX</p><h2>ユーザーランク構成</h2></div></div><div className="rank-mix">{visibleRanks.map((rank)=>{const count=customerStats.filter((u)=>u.rank===rank).length;return <div key={rank}><span>{rank}</span><strong>{count}<small>名</small></strong><i><em style={{width:`${customerStats.length?count/customerStats.length*100:0}%`}}/></i></div>})}</div></article></section>
       </>}
 
-      {view === "maids" && <MaidReports viewer={viewer} />}
+      {view === "maids" && <>
+        <div className="tabs">
+          <button className={maidTab === "monthly" ? "active" : ""} onClick={() => setMaidTab("monthly")}>月次実績</button>
+          <button className={maidTab === "log" ? "active" : ""} onClick={() => setMaidTab("log")}>個別ログ（ご帰宅明細）</button>
+        </div>
+        {maidTab === "monthly" ? <MaidReports viewer={viewer} /> :
+        <section className="panel table-panel">
+          <div className="panel-head">
+            <div><p className="eyebrow">VISIT LOG</p><h2>{viewer.role === "admin" ? "メイド個別のご帰宅明細" : "あなたのご帰宅明細"}</h2><small>期間 {start}〜{end}・いつ／誰が／何分／どのチケット／支払い方法／チェキ／アイテム使用</small></div>
+            {viewer.role === "admin" && <label>メイド<select value={logMaidId} onChange={(e) => setLogMaidId(e.target.value)}><option value="">選択してください</option>{initialData.maids.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label>}
+          </div>
+          <VisitLogPanel start={start} end={end} maidId={viewer.role === "maid" ? viewer.maidId || "" : logMaidId} hideMaid exportName={`visit-log_${logMaidId || viewer.maidId || "me"}_${start}_${end}.csv`} />
+        </section>}
+      </>}
 
       {view === "growth" && viewer.role === "admin" && <GrowthPanel growth={growth} loading={growthLoading} error={growthError} />}
 
-      {view === "users" && viewer.role === "admin" && <CustomerDatabase rows={customerStats} start={start} end={end} ranks={visibleRanks} onExport={downloadCsv} />}
+      {view === "users" && viewer.role === "admin" && <CustomerDatabase ranks={visibleRanks} onExport={downloadCsv} />}
 
       {view === "relations" && viewer.role === "admin" && <CrossMatrix maids={data.maids} customers={customerStats} counts={crossCounts} onExport={downloadCsv} />}
 

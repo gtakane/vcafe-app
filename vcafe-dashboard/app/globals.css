@@ -138,6 +138,21 @@ tbody tr:hover{background:#fdf7fc}
 .late{background:#fdeaef;color:#cf5a76}
 .ok{background:#e9f8f1;color:#2f9a72}
 .muted{color:var(--muted);font-size:12px;padding:16px}
+/* タブ（メイド実績: 月次 / 個別ログ） */
+.tabs{display:flex;gap:8px;margin:2px 0 14px}
+.tabs button{border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:11px;padding:9px 16px;font-size:12px;font-weight:700;cursor:pointer}
+.tabs button:hover{background:#fdf7fc;color:var(--ink)}
+.tabs button.active{background:var(--grad);color:#fff;border-color:transparent;box-shadow:0 8px 18px rgba(200,120,180,.28)}
+/* 明細の集計サマリー行 */
+.log-summary{display:flex;flex-wrap:wrap;gap:18px;align-items:center;padding:0 20px 14px;font-size:11px;color:var(--muted)}
+.log-summary b{color:var(--ink);font-size:14px;margin:0 2px}
+.log-summary button{margin-left:auto}
+/* ユーザー個別ドリルダウン */
+.detail-panel{margin-top:16px;border:1px solid #e9d6ea}
+.fact-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;padding:0 20px 16px}
+.fact-grid div{background:var(--grad-soft);border-radius:11px;padding:10px 12px}
+.fact-grid span{display:block;font-size:9px;color:#8a6f8c;font-weight:700}
+.fact-grid strong{font-size:13px;color:var(--ink)}
 /* テーブル上部の絞り込みバー */
 .table-filters{display:flex;flex-wrap:wrap;gap:12px;align-items:end;padding:0 20px 16px;border-bottom:1px solid var(--line)}
 .table-filters label{display:grid;gap:4px;color:var(--muted);font-size:10px;font-weight:700}
