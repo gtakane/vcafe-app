@@ -115,6 +115,9 @@ export interface PaymentRowOut {
   channel: string;
   productId: string;
   status: string;
+  // 取り込み元コレクション。userPayments が全時代の台帳（正）で、
+  // payments/purchaseLog 由来の行は検証用に raw へ残すが集計からは除外する。
+  source: string;
 }
 
 // payments/{id} = Stripe/Webstore の課金ログ（author=ユーザーID、paymentAmount=円）。
@@ -131,6 +134,7 @@ export function mapPayment(document: SourceDocument, secret: string): PaymentRow
     channel: "webstore",
     productId: String(document.data.productId || document.data.itemId || ""),
     status: String(document.data.stripeStatus || ""),
+    source: "payments",
   };
 }
 
@@ -152,6 +156,34 @@ export function mapPurchase(document: SourceDocument, secret: string): PaymentRo
     channel: "inapp",
     productId: String(document.data.productId || ""),
     status: document.data.purchaseIsSuccessful === true ? "succeeded" : String(document.data.purchaseFailedReason || "failed"),
+    source: "purchaseLog",
+  };
+}
+
+// users/{uid}/userPayments/{id} = 全時代の課金台帳。
+//   WEB版(2020-11〜): amount=実払い円 + requestDate/paymentDate（requestDateのみの行は未完了）
+//   アプリ版(2023-10〜): coinVendor + chargeCoin + amount=ストア実払い円
+// アプリ内課金も実払い円額を持つため、purchaseLog のコイン×1.4円換算より正確。
+// payments/purchaseLog と重複するため、集計(payments_current)はこの source だけを使う。
+export function mapUserPayment(document: SourceDocument, secret: string): PaymentRowOut | null {
+  if (!document.parentId) return null;
+  const at = firestoreTimestampToIso(document.data.paymentDate) || firestoreTimestampToIso(document.data.requestDate);
+  const amount = numberValue(document.data.amount);
+  const coin = numberValue(document.data.chargeCoin);
+  // 金額もコインも無い行（決済リクエストのみで未完了）は数えない。
+  if (!at || (amount <= 0 && coin <= 0)) return null;
+  const customerId = pseudonymizeCustomerId(document.parentId, secret);
+  return {
+    // ドキュメントIDはユーザー配下でしか一意でないため、仮名化IDの先頭を付けて衝突を防ぐ。
+    id: `${document.id}:${customerId.slice(0, 8)}`,
+    customerId,
+    at,
+    amount,
+    coin,
+    channel: document.data.coinVendor ? "inapp" : "webstore",
+    productId: String(document.data.productId || document.data.itemId || ""),
+    status: document.data.paymentDate ? "succeeded" : "amount-only",
+    source: "userPayments",
   };
 }
 

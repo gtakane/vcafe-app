@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildMaidMap, mapPayment, mapPurchase, mapShift, mapUser, mapVisit, pseudonymizeCustomerId } from "../src/transform.ts";
+import { buildMaidMap, mapPayment, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, pseudonymizeCustomerId } from "../src/transform.ts";
 
 const secret = "0123456789abcdef0123456789abcdef";
 const timestamp = (iso: string) => ({ toDate: () => new Date(iso) });
@@ -85,4 +85,45 @@ test("mapPurchase: アプリ内課金を正規化する（コイン数を保持�
 test("mapPayment/mapPurchase: 必須項目が欠けた行は除外する", () => {
   assert.equal(mapPayment({ id: "x", data: { paymentAmount: 100 } }, "secret-secret-secret-secret-1234"), null);
   assert.equal(mapPurchase({ id: "y", data: { userId: "u" } }, "secret-secret-secret-secret-1234"), null);
+});
+
+test("mapUserPayment: WEB版の円建て課金を台帳として取り込む", () => {
+  const row = mapUserPayment({ id: "up-1", parentId: "user-web", data: {
+    amount: 1100,
+    requestDate: timestamp("2020-11-07T05:19:07.765Z"),
+    paymentDate: timestamp("2020-11-07T05:20:14.722Z"),
+  } }, secret)!;
+  assert.equal(row.at, "2020-11-07T05:20:14.722Z"); // paymentDate を優先
+  assert.equal(row.amount, 1100);
+  assert.equal(row.coin, 0);
+  assert.equal(row.channel, "webstore");
+  assert.equal(row.source, "userPayments");
+  assert.notEqual(row.customerId, "user-web"); // 仮名化されている
+  assert.ok(!row.id.includes("user-web")); // 生のユーザーIDをIDに含めない
+});
+
+test("mapUserPayment: アプリ版はストア実払い円額を採用する（×1.4換算より正確）", () => {
+  const row = mapUserPayment({ id: "up-2", parentId: "user-app", data: {
+    productId: "com.v.cafe.athome.500ac", coinVendor: "apple",
+    chargeCoin: 500, chargeRewardPoint: 0, amount: 740, amountRewardPoint: 0,
+    paymentDate: timestamp("2025-04-09T16:39:48.283Z"),
+  } }, secret)!;
+  assert.equal(row.amount, 740); // 500ac×1.4=700 ではなく実払いの740円
+  assert.equal(row.coin, 500);
+  assert.equal(row.channel, "inapp");
+  assert.equal(row.status, "succeeded");
+});
+
+test("mapUserPayment: 未完了の決済リクエスト(requestDateのみ)は除外する", () => {
+  assert.equal(mapUserPayment({ id: "up-3", parentId: "user-x", data: {
+    requestDate: timestamp("2020-11-07T05:08:01.548Z"),
+  } }, secret), null);
+  assert.equal(mapUserPayment({ id: "up-4", data: { amount: 100 } }, secret), null); // 親ID無し
+});
+
+test("mapPayment/mapPurchase: source列で由来を区別できる", () => {
+  const pay = mapPayment({ id: "p", data: { author: "u", paymentAmount: 1, requestDate: timestamp("2026-01-01T00:00:00Z") } }, secret)!;
+  const buy = mapPurchase({ id: "b", data: { userId: "u", coinSendToChargeCoin: 1, purchaseIsSuccessful: true, confirmPurchaseTime: timestamp("2026-01-01T00:00:00Z") } }, secret)!;
+  assert.equal(pay.source, "payments");
+  assert.equal(buy.source, "purchaseLog");
 });

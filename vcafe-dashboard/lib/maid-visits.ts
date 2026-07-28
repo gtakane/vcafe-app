@@ -77,7 +77,9 @@ export function buildMaidVisitLogs(
         maidName: maidNames.get(visit.maidId) || "—",
         type: visit.type,
         typeLabel: typeLabel(visit.type),
-        minutes: visit.minutes ?? DEFAULT_INITIAL_TIME,
+        // リワードポイント払い等では initialTime に実測の小数分が入る（例 9.7757…）。
+        // そのまま表示すると「9.776」が千区切りの 9,776 に見えるため、分は整数へ丸める。
+        minutes: Math.round(visit.minutes ?? DEFAULT_INITIAL_TIME),
         ticketId,
         ticketLabel: ticketLabel(ticketId),
         payment: paymentLabel(visit.type, ticketId, billedCoin, billedRewardPoint),

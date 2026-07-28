@@ -39,6 +39,19 @@ echo "== 4) 課金ログ（Webstore/アプリ内課金） =="
 q "SELECT channel, COUNT(*) AS row_count, ROUND(SUM(amount)) AS yen FROM \`${PROJECT_ID}.${DS}.payments_current\` GROUP BY channel"
 
 echo
+echo "== 4b) 課金ソース別×年別（userPayments が全時代をカバーしているかの検証） =="
+q "SELECT COALESCE(source, '(旧)') AS source, channel,
+          FORMAT_DATE('%Y', DATE(\`at\`, 'Asia/Tokyo')) AS year,
+          COUNT(*) AS row_count, ROUND(SUM(amount)) AS yen
+   FROM (
+     SELECT * EXCEPT(rn) FROM (
+       SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY syncedAt DESC) AS rn
+       FROM \`${PROJECT_ID}.${DS}.payments_raw\`
+     ) WHERE rn = 1
+   )
+   GROUP BY source, channel, year ORDER BY year, source, channel"
+
+echo
 echo "== 5) customers_current ビューが新列を返せるか（ビューが古いと新項目が全て空になる） =="
 bq --project_id="${PROJECT_ID}" show --format=prettyjson "${PROJECT_ID}:${DS}.customers_current" 2>/dev/null \
   | python3 -c "
@@ -61,3 +74,6 @@ echo "※ 2)の with_ticket が 0 → 再バックフィル(BACKFILL_FROM)が未
 echo "※ 3)が 0 → userRecordPresents のインデックス作成前にバックフィルした可能性（作成後に再実行）"
 echo "※ 5)で不足あり → apply-schema.sh を実行し直す（ビュー再作成）だけで直る。再バックフィル不要"
 echo "※ 6)の with_gender が 0 → SYNC_ALL_USERS=true でのバックフィルが未完了。再実行が必要"
+echo "※ 4b)の見方: userPayments の webstore が 2024〜2026 にも十分な件数・金額であれば"
+echo "   旧 payments(Stripe) の写しも台帳に入っており、二重計上なしで全時代をカバーできている。"
+echo "   逆に 2024 以降の webstore が (旧) にしか無い場合は、ビューの調整が必要なので報告してください。"

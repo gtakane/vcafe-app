@@ -2,7 +2,7 @@ import { BigQuery } from "@google-cloud/bigquery";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { loadSyncConfig } from "./config.ts";
-import { buildMaidMap, mapCheki, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapVisit, type SourceDocument } from "./transform.ts";
+import { buildMaidMap, mapCheki, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
 process.on("unhandledRejection", (error) => {
@@ -78,7 +78,7 @@ async function insertRows(tableName: string, rows: Array<Record<string, unknown>
 
 // 指定した [start, end) の24時間窓を1回分同期する。
 async function syncWindow(start: Date, end: Date) {
-  const [visitDocuments, chekiDocuments, shiftDocuments, paymentDocuments, purchaseDocuments, presentDocuments] = await Promise.all([
+  const [visitDocuments, chekiDocuments, shiftDocuments, paymentDocuments, purchaseDocuments, presentDocuments, userPaymentDocuments] = await Promise.all([
     readGroup("userRecordVisits", "enterDateTime", start, end),
     readGroup("userAlbum", "date", start, end),
     readGroup("workshifts", "openTime", start, end),
@@ -89,8 +89,15 @@ async function syncWindow(start: Date, end: Date) {
       console.warn(`PRESENTS_SKIPPED ${(error as Error).message}`);
       return [] as SourceDocument[];
     }),
+    // 全時代の課金台帳。userPayments/paymentDate の COLLECTION_GROUP 昇順インデックス（除外設定）が必要。
+    readGroup("userPayments", "paymentDate", start, end).catch((error) => {
+      console.warn(`USERPAYMENTS_SKIPPED ${(error as Error).message}`);
+      return [] as SourceDocument[];
+    }),
   ]);
-  const userIds = [...new Set([...visitDocuments, ...chekiDocuments].map((document) => document.parentId).filter((id): id is string => Boolean(id)))];
+  // 課金者(userPayments の親)も含めて users を読む。テストユーザー除外を課金にも効かせ、
+  // ご帰宅が無く課金だけあるユーザーも customers_raw に載せるため。
+  const userIds = [...new Set([...visitDocuments, ...chekiDocuments, ...userPaymentDocuments].map((document) => document.parentId).filter((id): id is string => Boolean(id)))];
   const userDocuments = await readUsers(userIds);
   const excludedUsers = new Set(userDocuments.filter((document) => !mapUser(document, config.hmacSecret)).map((document) => document.id));
   const maidMap = buildMaidMap(shiftDocuments);
@@ -98,10 +105,13 @@ async function syncWindow(start: Date, end: Date) {
   const visits = visitDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapVisit(document, config.hmacSecret, maidMap)).filter((row): row is NonNullable<typeof row> => Boolean(row));
   const cheki = chekiDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapCheki(document, config.hmacSecret, maidMap, syncedAt)).filter((row): row is NonNullable<typeof row> => Boolean(row));
   const shifts = shiftDocuments.map(mapShift).filter((row): row is NonNullable<typeof row> => Boolean(row));
-  // 課金ログ: Webstore(円) と アプリ内課金(コイン) を payments_raw に統合して保持する。
+  // 課金ログ: userPayments（全時代の台帳・実払い円）を正とし、
+  // 旧2ソース(payments/purchaseLog)も検証用に raw へ残す（集計はビュー側で userPayments に限定）。
   const payments = [
     ...paymentDocuments.map((document) => mapPayment(document, config.hmacSecret)),
     ...purchaseDocuments.map((document) => mapPurchase(document, config.hmacSecret)),
+    ...userPaymentDocuments.filter((document) => !excludedUsers.has(document.parentId || ""))
+      .map((document) => mapUserPayment(document, config.hmacSecret)),
   ].filter((row): row is NonNullable<typeof row> => Boolean(row));
   const presents = presentDocuments
     .filter((document) => !excludedUsers.has(document.parentId || ""))
@@ -188,27 +198,35 @@ if (process.env.SYNC_ALL_USERS === "true") {
 
 // バックフィル設定（いずれも無ければ通常の単一窓＝増分同期）:
 //   BACKFILL_FROM=YYYY-MM-DD … その日(UTC)から現在までを24時間窓で取り込む
+//   BACKFILL_TO=YYYY-MM-DD   … 終了日(UTC・この日は含まない)。長期間を数回に分けて実行する用
 //   BACKFILL_DAYS=N          … 過去N日を24時間窓で取り込む
 const DAY_MS = 24 * 60 * 60 * 1000;
 const backfillFrom = (process.env.BACKFILL_FROM || "").trim();
+const backfillTo = (process.env.BACKFILL_TO || "").trim();
 const backfillDays = Number(process.env.BACKFILL_DAYS || 0);
 
 const windows: Array<[Date, Date]> = [];
 if (backfillFrom || (Number.isInteger(backfillDays) && backfillDays > 0)) {
   const now = Date.now();
+  let endMs = now;
+  if (backfillTo) {
+    const parsedTo = new Date(`${backfillTo}T00:00:00Z`);
+    if (Number.isNaN(parsedTo.getTime())) throw new Error("BACKFILL_TOはYYYY-MM-DD形式で指定してください");
+    endMs = Math.min(parsedTo.getTime(), now);
+  }
   let startMs: number;
   if (backfillFrom) {
     const parsed = new Date(`${backfillFrom}T00:00:00Z`);
     if (Number.isNaN(parsed.getTime())) throw new Error("BACKFILL_FROMはYYYY-MM-DD形式で指定してください");
     startMs = parsed.getTime();
   } else {
-    startMs = now - backfillDays * DAY_MS;
+    startMs = endMs - backfillDays * DAY_MS;
   }
-  const totalWindows = Math.ceil((now - startMs) / DAY_MS);
-  if (totalWindows < 1) throw new Error("バックフィル開始日が未来です");
-  if (totalWindows > 550) throw new Error(`バックフィル窓が多すぎます(${totalWindows})。550日以内にしてください`);
-  for (let cursor = startMs; cursor < now; cursor += DAY_MS) {
-    windows.push([new Date(cursor), new Date(Math.min(cursor + DAY_MS, now))]);
+  const totalWindows = Math.ceil((endMs - startMs) / DAY_MS);
+  if (totalWindows < 1) throw new Error("バックフィル開始日が終了日以降です");
+  if (totalWindows > 550) throw new Error(`バックフィル窓が多すぎます(${totalWindows})。BACKFILL_TO で550日以内に区切って実行してください`);
+  for (let cursor = startMs; cursor < endMs; cursor += DAY_MS) {
+    windows.push([new Date(cursor), new Date(Math.min(cursor + DAY_MS, endMs))]);
   }
 } else {
   windows.push([config.start, config.end]);

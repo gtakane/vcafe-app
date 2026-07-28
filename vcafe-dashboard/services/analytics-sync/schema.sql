@@ -44,13 +44,30 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.payments_raw` (
 PARTITION BY DATE(`at`)
 CLUSTER BY customerId;
 
+-- 取り込み元コレクション（userPayments / payments / purchaseLog）。
+-- userPayments が全時代の台帳（WEB版もアプリ版も実払い円額を持つ）で、
+-- payments/purchaseLog は同じ課金の別記録のため、両方を集計すると二重計上になる。
+ALTER TABLE `PROJECT_ID.DATASET_ID.payments_raw`
+  ADD COLUMN IF NOT EXISTS source STRING;
+
 CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.payments_current` AS
-SELECT * EXCEPT(row_number, syncedAt)
-FROM (
-  SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY syncedAt DESC) AS row_number
-  FROM `PROJECT_ID.DATASET_ID.payments_raw`
+WITH latest AS (
+  SELECT * EXCEPT(row_number, syncedAt)
+  FROM (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY syncedAt DESC) AS row_number
+    FROM `PROJECT_ID.DATASET_ID.payments_raw`
+  )
+  WHERE row_number = 1
+), ledger AS (
+  SELECT * FROM latest WHERE source = 'userPayments'
 )
-WHERE row_number = 1;
+-- userPayments を正とする。まだ1件も無い間（バックフィル前）は旧ソースで代替し、
+-- ダッシュボードが空にならないようにする。
+SELECT * FROM ledger
+UNION ALL
+SELECT * FROM latest
+WHERE (source IS NULL OR source != 'userPayments')
+  AND (SELECT COUNT(*) FROM ledger) = 0;
 
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.visits_raw` (
   id STRING NOT NULL,

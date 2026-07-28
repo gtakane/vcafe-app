@@ -75,3 +75,10 @@ test("buildMaidVisitLogs: 明細列が未同期の古い行でも既定値で表
   assert.equal(log.ticketLabel, "—");
   assert.equal(log.billedCoin, 0);
 });
+
+test("buildMaidVisitLogs: 小数の滞在分は整数へ丸める（9.776 が 9,776 に見える誤読を防ぐ）", () => {
+  // リワードポイント払いでは initialTime に実測の小数分が入ることがある（本番実例: 9.775766…）。
+  const [log] = buildMaidVisitLogs([visit({ minutes: 9.775766666666666, billedCoin: 0, billedRewardPoint: 310 })], maids, customers, []);
+  assert.equal(log.minutes, 10);
+  assert.equal(log.payment, "リワードポイント");
+});
