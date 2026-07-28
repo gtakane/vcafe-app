@@ -34,8 +34,26 @@ const printFields = (data, indent) => {
   for (const key of Object.keys(data).sort()) console.log(`${indent}${key}: ${preview(data[key])}`);
 };
 
+// --latest を付けると、日付らしいフィールドを自動検出して新しい順に表示する。
+const wantLatest = process.argv.includes("--latest");
+const orderArg = (process.argv.find((a) => a.startsWith("--order=")) || "").split("=")[1];
+
 console.log(`# project=${projectId} collection=${name}`);
-const snapshot = await db.collection(name).limit(limit).get();
+let snapshot = null;
+if (wantLatest || orderArg) {
+  // 並び替え候補: 明示指定 → 1件目の日付らしいフィールド
+  const probe = await db.collection(name).limit(1).get();
+  const keys = probe.empty ? [] : Object.keys(probe.docs[0].data());
+  const candidates = [orderArg, ...keys.filter((k) => /date|time|at$|created|updated/i.test(k))].filter(Boolean);
+  for (const field of candidates) {
+    try {
+      const s = await db.collection(name).orderBy(field, "desc").limit(limit).get();
+      if (!s.empty) { snapshot = s; console.log(`# 並び替え: ${field} 降順（新しい順）`); break; }
+    } catch { /* このフィールドでは並び替え不可。次を試す */ }
+  }
+  if (!snapshot) console.log("# 並び替えできるフィールドが見つからなかったため未ソートで表示します");
+}
+if (!snapshot) snapshot = await db.collection(name).limit(limit).get();
 if (snapshot.empty) {
   console.log("(0件) コレクション名を確認してください。トップレベル一覧:");
   for (const col of await db.listCollections()) console.log(`- ${col.id}`);
