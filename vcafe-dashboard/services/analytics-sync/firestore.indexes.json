@@ -1,38 +1,47 @@
 {
-  "__comment__": "本番プロジェクト(v-athome-cafe-app)に必要な collection group スコープの単一フィールドインデックスの記録。分析同期(index.ts)は userRecordVisits/enterDateTime, userAlbum/date, workshifts/openTime, userRecordPresents/presentDateTime に対する collectionGroup の範囲クエリを実行するため、COLLECTION_GROUP スコープのインデックスが必要（無いと FAILED_PRECONDITION）。【重要】このファイルを firebase deploy --only firestore:indexes で適用しないこと: ここに書かれていない本番側の既存インデックス/例外を削除する方向に同期されるため危険。追加は node check-presents-index.mjs が表示するコンソールURL（1クリックで作成・追加のみ）か、gcloud firestore indexes fields update を使うこと。",
+  "__comment__": "本番プロジェクト(v-athome-cafe-app)の COLLECTION_GROUP スコープ単一フィールドインデックス例外の記録（2026-07時点のコンソール実機と一致）。分析同期(index.ts)は userRecordVisits/enterDateTime, userAlbum/date, workshifts/openTime, userRecordPresents/presentDateTime に対して collectionGroup の範囲クエリを実行するため、これらは COLLECTION_GROUP ASCENDING が必要（無いと FAILED_PRECONDITION）。assetMaids/roomAdmissions/userVisitMaids/workShiftGroups は本番アプリ側が使用しているもので、分析では不要だが実態を記録している。",
+  "__warning__": "このファイルを firebase deploy --only firestore:indexes で適用しないこと。deploy はファイルの内容に本番を合わせるため、ここに書かれていない例外が削除され本番障害につながる。追加は Firebase コンソールの Firestore > インデックス > 除外 > 「除外を追加」（追加のみ）か、node check-presents-index.mjs が表示するURLから行うこと。",
   "indexes": [],
   "fieldOverrides": [
     {
-      "collectionGroup": "userRecordVisits",
-      "fieldPath": "enterDateTime",
-      "indexes": [
-        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
-        { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
-      ]
+      "collectionGroup": "assetMaids",
+      "fieldPath": "type",
+      "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }]
+    },
+    {
+      "collectionGroup": "roomAdmissions",
+      "fieldPath": "userId",
+      "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }]
     },
     {
       "collectionGroup": "userAlbum",
       "fieldPath": "date",
-      "indexes": [
-        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
-        { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
-      ]
+      "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }]
     },
     {
       "collectionGroup": "userRecordPresents",
       "fieldPath": "presentDateTime",
-      "indexes": [
-        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
-        { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
-      ]
+      "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }]
+    },
+    {
+      "collectionGroup": "userRecordVisits",
+      "fieldPath": "enterDateTime",
+      "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }]
+    },
+    {
+      "collectionGroup": "userVisitMaids",
+      "fieldPath": "nickname",
+      "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }]
+    },
+    {
+      "collectionGroup": "workShiftGroups",
+      "fieldPath": "openTime",
+      "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }]
     },
     {
       "collectionGroup": "workshifts",
       "fieldPath": "openTime",
-      "indexes": [
-        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
-        { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
-      ]
+      "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }]
     }
   ]
 }
