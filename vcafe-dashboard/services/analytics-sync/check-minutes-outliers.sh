@@ -22,17 +22,17 @@ q "SELECT minutes, COUNT(*) AS row_count
    GROUP BY minutes ORDER BY minutes DESC LIMIT 30"
 
 echo
-echo "== 2) 異常に大きい行の実例（120分超・新しい順20件） =="
-q "SELECT DATETIME(at, 'Asia/Tokyo') AS at_jst, type, ticketId, minutes, billedCoin, billedRewardPoint
+echo "== 2) 異常に大きい行の実例（40分超・新しい順20件） =="
+q "SELECT DATETIME(\`at\`, 'Asia/Tokyo') AS at_jst, type, ticketId, minutes, billedCoin, billedRewardPoint
    FROM \`${PROJECT_ID}.${DS}.visits_current\`
-   WHERE minutes > 120
-   ORDER BY at DESC LIMIT 20"
+   WHERE minutes > 40
+   ORDER BY \`at\` DESC LIMIT 20"
 
 echo
 echo "== 3) 異常値はいつの時代のデータか（月別） =="
-q "SELECT FORMAT_DATE('%Y-%m', DATE(at, 'Asia/Tokyo')) AS month,
+q "SELECT FORMAT_DATE('%Y-%m', DATE(\`at\`, 'Asia/Tokyo')) AS month,
           COUNT(*) AS visits,
-          COUNTIF(minutes > 120) AS over120,
+          COUNTIF(minutes > 40) AS over40,
           MAX(minutes) AS max_minutes
    FROM \`${PROJECT_ID}.${DS}.visits_current\`
    WHERE minutes IS NOT NULL

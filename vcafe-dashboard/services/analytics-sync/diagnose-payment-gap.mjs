@@ -64,7 +64,7 @@ function summarize(docs) {
 async function inspectUser(uid, userData) {
   console.log(`\n${"=".repeat(66)}`);
   console.log(`■ users/${uid}`);
-  console.log(`  nickname=${userData?.nickname ?? "?"} 累計ご帰宅=${userData?.totalVisitAmount ?? "?"} 登録=${fmt(userData?.registrationDate)} lastPayment=${fmt(userData?.lastPaymentDateTime || userData?.lastPaymentAt)}`);
+  console.log(`  nickname=${userData?.nickname ?? "?"} 累計ご帰宅=${userData?.visitAmount ?? "?"} 登録=${fmt(userData?.registrationDate)} lastPayment=${fmt(userData?.lastPaymentDate)}`);
 
   // 1) 現在同期している2ソース
   const [pay, purchase] = await Promise.all([
@@ -123,8 +123,9 @@ if (targetUser) {
   targets = [{ uid: targetUser, data: doc.exists ? doc.data() : null }];
 } else {
   // ご帰宅上位のユーザーを取り、「課金の痕跡が薄い」人を選ぶ。
+  // ※ Firestore 上の累計ご帰宅フィールドは visitAmount（BigQuery側の totalVisitAmount の元）。
   const snap = await db.collection("users")
-    .orderBy("totalVisitAmount", "desc")
+    .orderBy("visitAmount", "desc")
     .limit(60)
     .get();
   console.log(`ご帰宅上位 ${snap.size}人 から課金額とのギャップが大きい人を抽出します…`);
@@ -136,7 +137,7 @@ if (targetUser) {
       db.collection("payments").where("author", "==", doc.id).count().get().then((r) => r.data().count).catch(() => -1),
       db.collection("purchaseLog").where("userId", "==", doc.id).count().get().then((r) => r.data().count).catch(() => -1),
     ]);
-    rows.push({ uid: doc.id, data, visits: Number(data.totalVisitAmount) || 0, payCount, purchaseCount });
+    rows.push({ uid: doc.id, data, visits: Number(data.visitAmount) || 0, payCount, purchaseCount });
   }
 
   console.log(`\n  ${"ご帰宅".padStart(6)} ${"payments".padStart(9)} ${"purchase".padStart(9)}  uid / nickname`);
