@@ -108,7 +108,8 @@ async function inspectUser(uid, userData) {
       const s = summarize(adminPay.docs);
       console.log(`  ★ userAdmin/userAdminPayment/payments: ${s.count}件 ${yen(s.amountSum)} 期間 ${s.first}〜${s.last}`);
     } else if (adminDoc?.exists) {
-      console.log(`  userAdmin/userAdminPayment (doc): ${JSON.stringify(adminDoc.data()).slice(0, 300)}`);
+      // トークン等の機微情報を端末に出さないため、フィールド名だけ表示する。
+      console.log(`  userAdmin/userAdminPayment (doc): フィールド=${Object.keys(adminDoc.data() || {}).join(", ")}`);
     }
   } catch { /* 形が違う場合は無視 */ }
 
