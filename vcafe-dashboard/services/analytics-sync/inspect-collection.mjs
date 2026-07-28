@@ -34,6 +34,20 @@ const printFields = (data, indent) => {
   for (const key of Object.keys(data).sort()) console.log(`${indent}${key}: ${preview(data[key])}`);
 };
 
+// 引数に "コレクション/ドキュメントID" を渡した場合は、その1件だけを表示する。
+if (name.includes("/")) {
+  const doc = await db.doc(name).get();
+  console.log(`# project=${projectId} doc=${name}`);
+  if (!doc.exists) {
+    console.log("★ このドキュメントは存在しません（アプリが undefined を掴む直接の原因になり得ます）");
+    process.exit(0);
+  }
+  printFields(doc.data(), "    ");
+  const subs = await doc.ref.listCollections();
+  console.log(`    (subcollections: ${subs.map((c) => c.id).join(", ") || "なし"})`);
+  process.exit(0);
+}
+
 // --latest を付けると、日付らしいフィールドを自動検出して新しい順に表示する。
 const wantLatest = process.argv.includes("--latest");
 const orderArg = (process.argv.find((a) => a.startsWith("--order=")) || "").split("=")[1];
