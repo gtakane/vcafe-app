@@ -1,6 +1,6 @@
 # ダッシュボードAPIの段階的移行計画
 
-`dashboard.tsx` の分割（731行 → 225行 + 11ファイル）は完了した。
+`dashboard.tsx` の分割（731行 → 177行 + 13ファイル）は完了した。
 ただし**ファイル分割だけでは根本問題は解決していない**。ここではその先の設計を示す。
 
 ## いまの問題
@@ -61,10 +61,12 @@
 ## 分割後のファイル構成
 
 ```
-components/dashboard.tsx                  225行  画面の骨格・ナビ・期間フィルタ
+components/dashboard.tsx                  177行  画面の骨格・ナビ・期間フィルタ
+components/dashboard/hooks/use-analytics-data.ts 分析データ/グロース/Discord申請の取得
 components/dashboard/shared/format.ts            表示フォーマット（通貨・日時・切り捨て）
 components/dashboard/shared/metric-card.tsx      KPIカード
 components/dashboard/shared/line-chart.tsx       推移グラフ
+components/dashboard/views/overview-view.tsx
 components/dashboard/views/maid-performance-view.tsx
 components/dashboard/views/customer-database-view.tsx
 components/dashboard/views/relations-view.tsx
@@ -75,12 +77,16 @@ components/dashboard/visit-log/panel.tsx
 lib/csv.ts                                       CSV生成（インジェクション対策込み）
 ```
 
+## 分割で得られたこと
+
+`dashboard.tsx` は 731行 → **177行**。データ取得は3つのフックに分かれ、
+UI状態（タブ選択・並び順）とは混在しなくなった。
+段階1でAPIを画面別に分けるとき、対応するフックだけを差し替えればよい。
+
+分割の前後で6画面のスクリーンショットを撮り、表示が変わらないことを確認している。
+
 ## 未実施
 
-- `components/dashboard/hooks/use-analytics-data.ts` … データ取得の `useEffect` を
-  フックへ切り出す作業。着手したが、UI状態（タブ選択など）が同じ `useEffect` 群に
-  混在しており、機械的に切り出すと壊れることを確認したため差し戻した。
-  段階1でAPIを分けるときに、画面ごとのフックとして自然に分かれるため、
-  そのタイミングで行うのが安全。
-- `components/dashboard/views/overview-view.tsx` … 概要画面は骨格と密結合しており、
-  切り出すと props の受け渡しだけが増える。段階1で `/api/summary` を入れた後に分離する。
+- 段階1〜3のAPI移行そのもの（本ドキュメントの計画）。
+- `crossVisitCounts` と `customerRows` はクライアント側の O(顧客数 × 訪問数) 走査のまま。
+  段階1で `/api/relations` を入れるまでは、期間を広げると重くなる。

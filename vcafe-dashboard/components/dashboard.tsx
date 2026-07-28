@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { buildTrend, crossVisitCounts, customerRows, filterData, summarize } from "@/lib/analytics";
-import type { AttendanceSubmission, Customer, Granularity, Maid, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Shift, SyncFreshness, Viewer, ViewerScopedData } from "@/lib/types";
+import type { Customer, Granularity, Maid, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Shift, SyncFreshness, Viewer, ViewerScopedData } from "@/lib/types";
 import type { GrowthMetrics } from "@/lib/growth";
 // 座席定数はサーバー依存の無い metrics から取る（growth は BigQuery を読み込むため）。
 import { mergedStayMinutes, SEATS_PER_MAID, shiftActualHours } from "@/lib/metrics";
@@ -17,6 +17,8 @@ import MaidReports from "@/components/dashboard/views/maid-performance-view";
 import CustomerDatabase from "@/components/dashboard/views/customer-database-view";
 import CrossMatrix from "@/components/dashboard/views/relations-view";
 import GrowthPanel from "@/components/dashboard/views/growth-view";
+import OverviewView from "@/components/dashboard/views/overview-view";
+import { useAnalyticsData, useAttendanceSubmissions, useGrowthMetrics } from "@/components/dashboard/hooks/use-analytics-data";
 
 type View = "overview" | "maids" | "growth" | "users" | "relations" | "attendance";
 
@@ -82,58 +84,12 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
   const [end, setEnd] = useState(initialEnd);
   const [granularity, setGranularity] = useState<Granularity>("day");
   const [maidId, setMaidId] = useState(viewer.role === "maid" ? viewer.maidId || "" : "");
-  const [remoteData, setRemoteData] = useState(initialData);
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState("");
-  const [submissions, setSubmissions] = useState<AttendanceSubmission[]>([]);
-  const [submissionError, setSubmissionError] = useState("");
   const [maidTab, setMaidTab] = useState<"monthly" | "log">("monthly");
   const [logMaidId, setLogMaidId] = useState("");
-  const [growth, setGrowth] = useState<GrowthMetrics | null>(null);
-  const [growthLoading, setGrowthLoading] = useState(false);
-  const [growthError, setGrowthError] = useState("");
-  useEffect(() => {
-    if (viewer.role !== "admin") return;
-    const controller = new AbortController();
-    const timer = window.setTimeout(async () => {
-      setGrowthLoading(true); setGrowthError("");
-      try {
-        const response = await fetch(`/api/growth?${new URLSearchParams({ start, end })}`, { signal: controller.signal, cache: "no-store" });
-        if (!response.ok) throw new Error((await response.json()).error || "グロース指標を取得できませんでした");
-        setGrowth(await response.json());
-      } catch (error) { if (!controller.signal.aborted) setGrowthError(error instanceof Error ? error.message : "グロース指標を取得できませんでした"); }
-      finally { if (!controller.signal.aborted) setGrowthLoading(false); }
-    }, 250);
-    return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [start, end, viewer.role]);
-  useEffect(() => {
-    if (viewer.role !== "admin") return;
-    const controller = new AbortController();
-    fetch("/api/attendance-submissions", { signal: controller.signal, cache: "no-store" })
-      .then(async (response) => {
-        const body = await response.json();
-        if (!response.ok) throw new Error(body.error || "Discord勤怠申請を取得できませんでした");
-        setSubmissions(body.submissions || []);
-      })
-      .catch((error) => { if (!controller.signal.aborted) setSubmissionError(error instanceof Error ? error.message : "Discord勤怠申請を取得できませんでした"); });
-    return () => controller.abort();
-  }, [viewer.role]);
-  useEffect(() => {
-    const initialMaidId = viewer.role === "maid" ? viewer.maidId || "" : "";
-    if (start === initialStart && end === initialEnd && maidId === initialMaidId) { setRemoteData(initialData); return; }
-    const controller = new AbortController();
-    const timer = window.setTimeout(async () => {
-      setLoading(true); setLoadError("");
-      try {
-        const params = new URLSearchParams({ start, end }); if (maidId) params.set("maidId", maidId);
-        const response = await fetch(`/api/analytics?${params}`, { signal: controller.signal, cache: "no-store" });
-        if (!response.ok) throw new Error((await response.json()).error || "データを取得できませんでした");
-        setRemoteData(await response.json());
-      } catch (error) { if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : "データを取得できませんでした"); }
-      finally { if (!controller.signal.aborted) setLoading(false); }
-    }, 250);
-    return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [start, end, maidId, initialStart, initialEnd, initialData]);
+  // データ取得は hooks へ委譲する。UI状態と取得処理を同じ useEffect 群に混ぜない。
+  const { remoteData, loading, loadError } = useAnalyticsData({ initialData, initialStart, initialEnd, viewer, start, end, maidId });
+  const { growth, growthLoading, growthError } = useGrowthMetrics({ viewer, start, end });
+  const { submissions, submissionError } = useAttendanceSubmissions(viewer);
   const data = useMemo(() => filterData(remoteData, viewer, { start, end, granularity, maidId: maidId || undefined }), [remoteData, viewer, start, end, granularity, maidId]);
   const totals = summarize(data);
   const trend = buildTrend(data.visits, granularity);
@@ -182,10 +138,7 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
         </div>;
       })()}
 
-      {view === "overview" && <>
-        <section className="metrics"><Metric label="ご帰宅数" value={`${number.format(totals.visits)}件`} note={`ユニーク ${totals.customerCount}名`}/><Metric label="売上" value={yen.format(totals.revenue)} note={`有料ご帰宅 ${totals.paid}件`} tone="purple"/><Metric label="実働時間" value={`${totals.workHours.toFixed(1)}h`} note={`遅刻合計 ${totals.lateMinutes.toFixed(0)}分`} tone="blue"/><Metric label="記念撮影" value={`${totals.cheki}枚`} note={`撮影率 ${totals.visits ? (totals.cheki/totals.visits*100).toFixed(1) : 0}%`} tone="orange"/>{viewer.role === "admin" && <><Metric label="1日あたり利用者数(平均)" value={growth ? `${number.format(growth.avgDau)}名` : "—"} note={growth ? `最も多い日 ${number.format(growth.peakDau)}名` : (growthError || "集計中")} tone="blue" hint="DAU（デイリー・アクティブ・ユーザー）＝その営業日に1回以上ご帰宅したユーザーの実人数。同じ人が何回ご帰宅しても1名と数えます。『平均』は選択期間の1日平均、『最も多い日』は期間中で最大だった日の人数です。"/><Metric label="新規登録者数" value={growth ? `${number.format(growth.newRegistrations)}名` : "—"} note={growth ? `課金転換 ${pct(growth.newPaidConversionRate)}` : (growthError || "集計中")} tone="purple" hint="選択期間内に新しく会員登録したユーザーの人数。課金転換は、そのうち期間内に有料ご帰宅をした人の割合です。"/></>}</section>
-        <section className="grid-2"><article className="panel"><div className="panel-head"><div><p className="eyebrow">PERFORMANCE TREND</p><h2>ご帰宅数の推移</h2></div><span className="badge">{granularity === "hour" ? "時間別" : granularity === "day" ? "日次" : granularity === "week" ? "週次" : "月次"}</span></div><LineChart points={trend}/></article><article className="panel"><div className="panel-head"><div><p className="eyebrow">CUSTOMER MIX</p><h2>ユーザーランク構成</h2></div></div><div className="rank-mix">{visibleRanks.map((rank)=>{const count=customerStats.filter((u)=>u.rank===rank).length;return <div key={rank}><span>{rank}</span><strong>{count}<small>名</small></strong><i><em style={{width:`${customerStats.length?count/customerStats.length*100:0}%`}}/></i></div>})}</div></article></section>
-      </>}
+      {view === "overview" && <OverviewView viewer={viewer} totals={totals} growth={growth} growthError={growthError} trend={trend} granularity={granularity} customerStats={customerStats} visibleRanks={visibleRanks} />}
 
       {view === "maids" && <>
         <div className="tabs">
