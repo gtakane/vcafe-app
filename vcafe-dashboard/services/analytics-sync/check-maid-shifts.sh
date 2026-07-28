@@ -60,8 +60,43 @@ q "SELECT DATETIME(s.scheduledStart, 'Asia/Tokyo') AS sched_start_jst,
    ORDER BY s.scheduledStart DESC LIMIT 20"
 
 echo
+echo "== 5) ★C: シフト時間の外で発生したご帰宅（種別ごと） =="
+echo "   予約ご帰宅は通常シフト(workshifts)の外で行われるため、分母に含まれず稼働率を押し上げます"
+q "WITH m AS (SELECT id FROM \`${PROJECT_ID}.${DS}.maids_current\` WHERE name = '${NAME}'),
+        v AS (
+          SELECT v.\`at\`, v.type, v.minutes
+          FROM \`${PROJECT_ID}.${DS}.visits_current\` v JOIN m ON m.id = v.maidId
+          WHERE DATE(TIMESTAMP_SUB(v.\`at\`, INTERVAL 2 HOUR), 'Asia/Tokyo') BETWEEN '${START}' AND '${END}'
+        ),
+        s AS (
+          SELECT COALESCE(s.actualStart, s.scheduledStart) AS st,
+                 COALESCE(s.actualEnd, s.scheduledEnd) AS en
+          FROM \`${PROJECT_ID}.${DS}.shifts_current\` s JOIN m ON m.id = s.maidId
+          WHERE DATE(TIMESTAMP_SUB(s.scheduledStart, INTERVAL 2 HOUR), 'Asia/Tokyo') BETWEEN '${START}' AND '${END}'
+        )
+   SELECT v.type,
+          COUNT(*) AS visits,
+          ROUND(SUM(v.minutes)) AS total_minutes,
+          COUNTIF(NOT EXISTS (SELECT 1 FROM s WHERE v.\`at\` >= s.st AND v.\`at\` < s.en)) AS outside_shift,
+          ROUND(SUM(IF(NOT EXISTS (SELECT 1 FROM s WHERE v.\`at\` >= s.st AND v.\`at\` < s.en), v.minutes, 0))) AS outside_minutes
+   FROM v GROUP BY v.type ORDER BY visits DESC"
+
+echo
+echo "== 6) 参考: 月次実績の お給仕時間 と お給仕時間(予約) =="
+q "SELECT r.month, ROUND(r.totalWorkTimes, 2) AS work_hours,
+          ROUND(r.totalWorkTimesReserve, 2) AS work_hours_reserve,
+          r.totalVisits, r.totalReservation
+   FROM \`${PROJECT_ID}.${DS}.maid_monthly_current\` r
+   JOIN \`${PROJECT_ID}.${DS}.maid_profiles_current\` p ON p.id = r.maidId
+   WHERE p.nickname = '${NAME}' AND r.month >= FORMAT_DATE('%Y%m', DATE('${START}'))
+   ORDER BY r.month DESC LIMIT 6"
+
+echo
 echo "----"
 echo "読み方:"
 echo "・2) の no_start / no_end が多い → 打刻漏れ。予定時刻で補完する修正で解決（適用済み）"
 echo "・3) に2行出る → シフトとご帰宅で maidId が分かれている。同期側の名寄せが必要"
 echo "・1) の shifts が 0 → そのメイドのシフトが同期されていない（別途調査）"
+echo "・5) で type=reservation の outside_shift が多い → 予約はシフト外。稼働率の分子から外すのが妥当"
+echo "・5) で type=paid の outside_shift が多い → シフトの同期漏れ。1)3)と併せて要調査"
+echo "・6) の work_hours_reserve が大きい → 予約稼働が別管理であることの裏付け"
