@@ -78,10 +78,33 @@ bash services/analytics-sync/check-bigquery-schema.sh
 
 ## 手順2: Webダッシュボードを配備する
 
+**トラフィックを移さずに新リビジョンを作り、検証してから切り替える。**
+
 ```bash
 cd ~/vcafe-app && git pull origin claude/nextjs-firebase-dashboard-review-w74yfo
-cd vcafe-dashboard && bash deploy-tokyo.sh
+cd vcafe-dashboard
+
+# 2-1. トラフィック0でデプロイ（IAM・Hosting・既存環境変数を触らない）
+bash deploy-revision-tokyo.sh
+
+# 2-2. 検証用URLに対してスモークテスト（出力された URL を使う）
+bash smoke-test-revision.sh "<検証用URL>"
+
+# 2-3. 成功したら切替（Cloud Run のトラフィック + Hosting の再ピン留め）
+bash promote-revision-tokyo.sh <新リビジョン名>
+
+# 失敗したら戻す
+bash rollback-revision-tokyo.sh <直前のリビジョン名>
 ```
+
+> **`deploy-tokyo.sh` は初回構築用で、日常の更新には使わない。**
+> 毎回 IAM ロールを付与し直し、`--allow-unauthenticated` を渡し、
+> `--env-vars-file` で環境変数を全置換し、Hosting まで即座に切り替える。
+> 検証前に本番トラフィックが新リビジョンへ移る。
+>
+> Hosting は `firebase.json` で `pinTag: true` を使っているため、
+> **Cloud Run のトラフィック切替だけでは Hosting 経由の配信は切り替わらない。**
+> `promote-revision-tokyo.sh` は両方を行う。
 
 含まれる修正:
 
@@ -94,10 +117,12 @@ cd vcafe-dashboard && bash deploy-tokyo.sh
 **配備前の確認**: `cloudrun.env.yaml` に `AUTH_MODE: firebase` があること（確認済み）。
 無いと起動時に例外で停止する。それが fail-closed の設計。
 
-**確認**: 管理者でログインし、6画面が表示されること。
+**確認**: `smoke-test-revision.sh` が全項目OKであること（未認証で6つのAPIが401を返す）。
+そのうえで管理者でログインし、6画面が表示されること。
 メイドアカウントがあれば、ユーザー名が「非表示」になっていること。
 
-**戻し方**: Cloud Run コンソールから直前のリビジョンへトラフィックを戻す。
+**戻し方**: `bash rollback-revision-tokyo.sh <直前のリビジョン名>`。
+リビジョンは削除せずトラフィックの向き先だけを戻す。
 手順1とは独立しているため、手順1を戻す必要はない。
 
 ---
