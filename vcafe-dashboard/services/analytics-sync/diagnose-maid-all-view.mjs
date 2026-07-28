@@ -130,13 +130,14 @@ const allMonthlyDocs = []; // 月の判定が外れたときの保険（追加�
 const perMaid = [];
 let failures = 0;
 
-// ドキュメントIDにも月フィールドにも月が入り得るので、両方を見て対象月を判定する。
+// 本番のドキュメントIDは "202607" 形式。ハイフン有無どちらでも当たるように正規化して比較する。
+const compactMonths = months.map((m) => m.replace(/-/g, ""));
 function matchesMonth(doc) {
   const candidates = [doc.id, doc.get("month"), doc.get("yearMonth"), doc.get("targetMonth")]
     .map((v) => (v?.toDate ? v.toDate().toISOString() : String(v ?? "")))
     .join(" ")
-    .replace(/\//g, "-");
-  return months.some((m) => candidates.includes(m));
+    .replace(/[-/]/g, "");
+  return compactMonths.some((m) => candidates.includes(m));
 }
 
 for (const doc of reportDocs) {
@@ -151,7 +152,15 @@ for (const doc of reportDocs) {
     for (const d of snap.docs) {
       allMonthlyDocs.push({ path: d.ref.path, data: d.data(), label: doc.label });
     }
-    perMaid.push({ id: doc.id, label: doc.label, total: snap.size, matched: picked.length, elapsed });
+    perMaid.push({
+      id: doc.id,
+      label: doc.label,
+      total: snap.size,
+      matched: picked.length,
+      elapsed,
+      months: snap.docs.map((d) => d.id.replace(/[-/]/g, "")),
+      active: doc.data.active,
+    });
   } catch (error) {
     failures += 1;
     perMaid.push({ id: doc.id, label: doc.label, error: error.message, elapsed: Date.now() - started });
@@ -182,6 +191,44 @@ if (!emptyMaids.length) console.log("（なし）");
 console.log("\n遅かった上位5件（ミリ秒）:");
 for (const m of slow) console.log(`- ${m.id} (${m.label}): ${m.elapsed}ms`);
 
+// ---------------------------------------------- 3.5) 月ごとの網羅状況（本命の確認）
+// ALL は全メイド分の当月レポートを読む。1人でも欠けると undefined を参照して全体が止まる。
+console.log("\n== 3.5) 直近6か月の網羅状況（★ 欠けている月がALLを止める） ==");
+const now = new Date(Date.now() + 9 * 3600000);
+const recent = [];
+for (let i = 0; i < 6; i += 1) {
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+  recent.push(`${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}`);
+}
+const ok = perMaid.filter((m) => !m.error);
+for (const month of recent) {
+  const have = ok.filter((m) => m.months?.includes(month));
+  const lack = ok.filter((m) => !m.months?.includes(month));
+  const lackActive = lack.filter((m) => m.active === true);
+  console.log(`\n${month}: ある=${have.length}人 / 無い=${lack.length}人（うち在籍中 active=true が ${lackActive.length}人）`);
+  for (const m of lack.slice(0, 40)) {
+    console.log(`  - maidWorkReport/${m.id} (${m.label}) active=${m.active}`);
+  }
+  if (lack.length > 40) console.log(`    …ほか ${lack.length - 40} 件`);
+}
+
+// 当月に絞った型チェック。ALL が実際に読む行だけを見る。
+const thisMonth = recent[0];
+const thisMonthDocs = allMonthlyDocs.filter((d) => d.path.endsWith(`/${thisMonth}`));
+console.log(`\n== 3.6) 当月(${thisMonth}) の ${thisMonthDocs.length}件だけで型チェック ==`);
+if (thisMonthDocs.length) {
+  const cur = findOutliers(thisMonthDocs);
+  console.log(`★ 形が他と違う: ${cur.outliers.length}件`);
+  for (const row of cur.outliers.slice(0, 30)) {
+    console.log(`- ${row.path} (${row.label})`);
+    for (const b of row.bad) console.log(`    ${b}`);
+  }
+  if (cur.outliers.length > 30) console.log(`  …ほか ${cur.outliers.length - 30} 件`);
+  if (!cur.outliers.length) console.log("（なし）");
+} else {
+  console.log("★ 当月のレポートが1件もありません。生成バッチが今月分を書けていません。");
+}
+
 // 対象月に1件も当たらなかったときは月の持ち方が想定と違うだけなので、全件で判定に切り替える。
 let inspectTarget = monthlyDocs;
 if (!monthlyDocs.length && allMonthlyDocs.length) {
@@ -203,8 +250,26 @@ if (inspectTarget.length) {
   if (!monthly.outliers.length) console.log("（なし）");
 }
 
+// -------------------------------------------------- 4) maids との突き合わせ
+console.log("\n== 4) maids（プロフィール）との突き合わせ ==");
+const maidSnap = await db.collection("maids").select("nickname", "active").limit(5000).get();
+const maidMap = new Map(maidSnap.docs.map((d) => [d.id, d.data()]));
+console.log(`maids=${maidMap.size}件 / maidWorkReport=${perMaid.length}件`);
+
+const noProfile = perMaid.filter((m) => !maidMap.has(m.id));
+console.log(`\n★ 実績はあるがプロフィール(maids)が無い: ${noProfile.length}件`);
+for (const m of noProfile) console.log(`- ${m.id} (${m.label})`);
+if (!noProfile.length) console.log("（なし）");
+
+const noReport = [...maidMap.entries()].filter(([id]) => !perMaid.some((m) => m.id === id));
+console.log(`\n★ プロフィールはあるが実績(maidWorkReport)が無い: ${noReport.length}件`);
+for (const [id, m] of noReport) console.log(`- maids/${id} (${m.nickname || "?"}) active=${m.active}`);
+if (!noReport.length) console.log("（なし）");
+
 console.log("\n----");
 console.log("読み方:");
+console.log("・3.5) で active=true なのに当月が「無い」メイドがいれば、それがALLを止めています");
+console.log("・4) の「プロフィールが無い」も、一覧で名前や画像を引けず止まる原因になります");
 console.log("・2) や 3) の「形が他と違う」に出た行 → その1件が JS で例外を投げ、ALL 全体が止まります");
 console.log("・3) の「読み取り失敗」 → 権限またはインデックス不足。メッセージの URL からインデックスを作成");
 console.log("・どこにも異常が無く合計時間だけ長い → 読み取り件数そのものが原因（タイムアウト）");
