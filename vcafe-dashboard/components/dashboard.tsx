@@ -263,7 +263,7 @@ const CUSTOMER_DB_COLUMNS: CustomerCol[] = [
 
 const SORTABLE_DB_KEYS = new Set<string>(["registeredAt", "name", "rank", "gender", "birthYear", "lastVisitAt", "lastPaymentAt", "lastPurchasedItemAt", "lastPresentAt", "purchasedItemCoin", "purchasedItemQuantity", "presentAmount", "coin", "rewardPoint", "totalVisitAmount", "maxConsecutiveVisitDays", "paymentCount", "paymentAmount"]);
 
-function CustomerDatabase({ ranks, onExport }: { ranks: string[]; onExport: (name: string, data: Array<Array<string | number>>) => void }) {
+function CustomerDatabase({ onExport }: { onExport: (name: string, data: Array<Array<string | number>>) => void }) {
   const [query, setQuery] = useState("");
   const [rank, setRank] = useState("");
   const [gender, setGender] = useState("");
@@ -301,7 +301,9 @@ function CustomerDatabase({ ranks, onExport }: { ranks: string[]; onExport: (nam
   }, [query, rank, gender, paying, regFrom, regTo, sortKey, sortDir]);
 
   const rows = result?.customers || [];
+  // 選択肢は取得したユーザー自身から作る（期間フィルタ由来のデータに依存させない）。
   const genders = useMemo(() => [...new Set(rows.map((r) => r.gender).filter(Boolean))].sort() as string[], [rows]);
+  const ranks = useMemo(() => [...new Set(rows.map((r) => r.rank).filter(Boolean))].sort(), [rows]);
   const toggleSort = (key: string) => {
     if (!SORTABLE_DB_KEYS.has(key)) return;
     if (key === sortKey) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
@@ -323,7 +325,7 @@ function CustomerDatabase({ ranks, onExport }: { ranks: string[]; onExport: (nam
   return <>
     <section className="panel table-panel">
       <div className="panel-head">
-        <div><p className="eyebrow">CUSTOMER DATABASE</p><h2>ユーザーデータベース</h2><small>{result ? `${number.format(result.total)}名中 ${number.format(rows.length)}名を表示` : "読込中"}・全会員が対象（上部の期間フィルタとは独立）</small></div>
+        <div><p className="eyebrow">CUSTOMER DATABASE</p><h2>ユーザーデータベース</h2><small>{result ? `${number.format(result.total)}名中 ${number.format(rows.length)}名を表示` : "読込中"}・全会員の累計値（登録時からの通算。期間指定なし）</small></div>
         <button className="secondary" disabled={!rows.length} onClick={() => onExport(`users_all.csv`, [["会員ID", ...CUSTOMER_DB_COLUMNS.map((c) => c.label)], ...rows.map((r) => [r.id, ...CUSTOMER_DB_COLUMNS.map((c) => (c.kind === "date" ? (r[c.key] ? jstDate(String(r[c.key])) : "") : c.kind === "gender" ? genderLabel(String(r[c.key] ?? "")) : String(r[c.key] ?? "")))])])}>CSV出力</button>
       </div>
       <div className="table-filters">
@@ -540,12 +542,13 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
     </aside>
     <main className="main">
       <header className="topbar"><div><p className="eyebrow">VIRTUAL AT-HOME CAFÉ</p><h1>{view === "overview" ? (viewer.role === "maid" ? "マイ実績" : "運営ダッシュボード") : nav.find((n)=>n.id===view)?.label}</h1></div><div className="account"><div className="avatar">{viewer.name.slice(0,1)}</div><div><strong>{viewer.name}</strong><small>{viewer.role === "admin" ? "管理者" : "メイド"}</small></div><LogoutButton /></div></header>
-      <section className="filters">
+      {/* ユーザーDBは全会員の通算値を扱い期間に依存しないため、期間フィルタを表示しない。 */}
+      {view !== "users" && <section className="filters">
         <div className="presets"><button onClick={()=>presets(1)}>今日</button><button onClick={()=>presets(7)}>7日</button><button onClick={()=>presets(30)}>30日</button><button className={start===initialStart&&end===initialEnd?"selected":""} onClick={()=>{setStart(initialStart);setEnd(initialEnd)}}>今月</button></div>
         <label>開始日<input type="date" value={start} max={end} onChange={(e)=>setStart(e.target.value)}/></label><span className="range-sep">–</span><label>終了日<input type="date" value={end} min={start} onChange={(e)=>setEnd(e.target.value)}/></label>
         <label>集計<select value={granularity} onChange={(e)=>setGranularity(e.target.value as Granularity)}><option value="hour">時間別</option><option value="day">日次</option><option value="week">週次</option><option value="month">月次</option></select></label>
         {viewer.role === "admin" && <label>メイド<select value={maidId} onChange={(e)=>setMaidId(e.target.value)}><option value="">すべて</option>{initialData.maids.map((m)=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>}
-      </section>
+      </section>}
       <div className="freshness"><span className="status-dot"/> 最終同期 {new Date(remoteData.generatedAt).toLocaleString("ja-JP",{timeZone:"Asia/Tokyo"})} <b>・分析用データ</b>{loading && " ・読込中"}{loadError && <span className="error-inline"> ・{loadError}</span>}</div>
 
       {view === "overview" && <>
@@ -570,7 +573,7 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
 
       {view === "growth" && viewer.role === "admin" && <GrowthPanel growth={growth} loading={growthLoading} error={growthError} />}
 
-      {view === "users" && viewer.role === "admin" && <CustomerDatabase ranks={visibleRanks} onExport={downloadCsv} />}
+      {view === "users" && viewer.role === "admin" && <CustomerDatabase onExport={downloadCsv} />}
 
       {view === "relations" && viewer.role === "admin" && <CrossMatrix maids={data.maids} customers={customerStats} counts={crossCounts} onExport={downloadCsv} />}
 
