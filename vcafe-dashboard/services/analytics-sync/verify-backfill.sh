@@ -39,11 +39,25 @@ echo "== 4) 課金ログ（Webstore/アプリ内課金） =="
 q "SELECT channel, COUNT(*) AS rows, ROUND(SUM(amount)) AS yen FROM \`${PROJECT_ID}.${DS}.payments_current\` GROUP BY channel"
 
 echo
-echo "== 5) ユーザー（全会員同期と付加項目） =="
-q "SELECT COUNT(*) AS customers, COUNTIF(gender IS NOT NULL) AS with_gender, COUNTIF(lastPaymentAt IS NOT NULL) AS with_last_payment, MIN(DATE(registeredAt)) AS oldest_registration FROM \`${PROJECT_ID}.${DS}.customers_current\`"
+echo "== 5) customers_current ビューが新列を返せるか（ビューが古いと新項目が全て空になる） =="
+bq --project_id="${PROJECT_ID}" show --format=prettyjson "${PROJECT_ID}:${DS}.customers_current" 2>/dev/null \
+  | python3 -c "
+import sys,json
+f=[x['name'] for x in json.load(sys.stdin)['schema']['fields']]
+need=['gender','lastVisitAt','lastPaymentAt','purchasedItemCoin','presentAmount','coin','rewardPoint','totalVisitAmount','maxConsecutiveVisitDays']
+missing=[c for c in need if c not in f]
+print('列:', ', '.join(f))
+print('→ 不足:', missing if missing else 'なし（ビューは最新）')
+if missing: print('   ★ ビューが古いです。apply-schema.sh を実行し直してください（CREATE OR REPLACE VIEW で解消）')
+" 2>/dev/null || echo "customers_current を取得できませんでした"
+
+echo
+echo "== 6) customers_raw に実データが入っているか =="
+q "SELECT COUNT(*) AS rows, COUNT(DISTINCT id) AS users, COUNTIF(gender IS NOT NULL) AS with_gender, COUNTIF(lastPaymentAt IS NOT NULL) AS with_last_payment, MIN(DATE(registeredAt)) AS oldest_registration FROM \`${PROJECT_ID}.${DS}.customers_raw\`"
 
 echo
 echo "※ 1)で明細列が「なし」→ apply-schema.sh を実行してから再バックフィル"
 echo "※ 2)の with_ticket が 0 → 再バックフィル(BACKFILL_FROM)が未実行、または DRY_RUN=true のまま"
 echo "※ 3)が 0 → userRecordPresents のインデックス作成前にバックフィルした可能性（作成後に再実行）"
-echo "※ 5)の customers が少ない → SYNC_ALL_USERS=true での実行が未完了"
+echo "※ 5)で不足あり → apply-schema.sh を実行し直す（ビュー再作成）だけで直る。再バックフィル不要"
+echo "※ 6)の with_gender が 0 → SYNC_ALL_USERS=true でのバックフィルが未完了。再実行が必要"
