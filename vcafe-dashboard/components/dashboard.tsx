@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { buildTrend, customerRows, filterData, summarize } from "@/lib/analytics";
-import type { AnalyticsData, AttendanceSubmission, Customer, Granularity, Maid, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Shift, Viewer } from "@/lib/types";
+import type { AttendanceSubmission, Customer, Granularity, Maid, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Shift, Viewer, ViewerScopedData } from "@/lib/types";
 import type { GrowthMetrics } from "@/lib/growth";
 // 座席定数はサーバー依存の無い metrics から取る（growth は BigQuery を読み込むため）。
 import { mergedStayMinutes, SEATS_PER_MAID, shiftActualHours } from "@/lib/metrics";
@@ -577,7 +577,7 @@ function GrowthPanel({ growth, loading, error }: { growth: GrowthMetrics | null;
   </>;
 }
 
-export default function Dashboard({ initialData, initialStart, initialEnd, viewer }: { initialData: AnalyticsData; initialStart: string; initialEnd: string; viewer: Viewer }) {
+export default function Dashboard({ initialData, initialStart, initialEnd, viewer }: { initialData: ViewerScopedData; initialStart: string; initialEnd: string; viewer: Viewer }) {
   const [view, setView] = useState<View>("overview");
   const [start, setStart] = useState(initialStart);
   const [end, setEnd] = useState(initialEnd);

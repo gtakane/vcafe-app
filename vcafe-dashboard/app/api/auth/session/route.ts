@@ -12,7 +12,10 @@ export async function POST(request: NextRequest) {
     const auth = getAuth(getAdminApp());
     const decoded = await auth.verifyIdToken(idToken, true);
     if (decoded.role !== "admin" && decoded.role !== "maid") return NextResponse.json({ error: "権限がありません" }, { status: 403 });
-    if (decoded.role === "maid" && typeof decoded.maidId !== "string") return NextResponse.json({ error: "maidIdがありません" }, { status: 403 });
+    // 空文字・空白のみの maidId はスコープを決められないため拒否する（lib/auth-claims.ts と同じ規則）。
+    if (decoded.role === "maid" && !(typeof decoded.maidId === "string" && decoded.maidId.trim())) {
+      return NextResponse.json({ error: "maidIdがありません" }, { status: 403 });
+    }
     const session = await auth.createSessionCookie(idToken, { expiresIn: 8 * 60 * 60 * 1000 });
     const response = NextResponse.json({ ok: true });
     response.cookies.set(cookieName, session, { httpOnly: true, secure: secureCookie, sameSite: "lax", maxAge: 8 * 60 * 60, path: "/" });

@@ -1,4 +1,4 @@
-import type { AnalyticsData, MaidVisitLog, Visit } from "./types";
+import type { AnalyticsData, MaidVisitLog, PresentLike, Viewer, Visit } from "./types";
 import { businessDateJst, DEFAULT_INITIAL_TIME, FREE_TICKET_IDS, TICKET_PRICES } from "./metrics.ts";
 // 実接客時間の算出は metrics.ts（サーバー依存なしの共通ロジック）にある。
 export { mergedStayMinutes } from "./metrics.ts";
@@ -37,7 +37,7 @@ export function paymentLabel(type: Visit["type"], ticketId: string, billedCoin: 
   return ticketId && ticketId !== "ATCOIN" ? "チケット" : "—";
 }
 
-export interface PresentLike { customerId: string; maidId: string; at: string; itemName: string; quantity: number }
+export type { PresentLike };
 
 /**
  * ご帰宅明細を組み立てる純関数。プレゼントは営業日＋ユーザー＋メイドが一致するものを紐づける
@@ -128,9 +128,9 @@ async function loadPresents(query: MaidVisitQuery): Promise<PresentLike[]> {
       quantity: Number(row.quantity || 1),
     }));
   } catch (error) {
-    // presents_current 未作成（スキーマ未適用）でも明細表示自体は継続する。
-    console.warn("プレゼントを取得できませんでした", (error as Error).message);
-    return [];
+    // 取得失敗を空配列にすると「アイテム使用0件」と区別できず、障害が正常値として表示される。
+    // 呼び出し側でエラーとして扱えるよう送出する。
+    throw new Error(`プレゼントを取得できませんでした: ${(error as Error).message}`, { cause: error });
   }
 }
 
@@ -140,6 +140,43 @@ export async function loadMaidVisitLogs(data: AnalyticsData, query: MaidVisitQue
     (!query.maidId || visit.maidId === query.maidId) && (!query.customerId || visit.customerId === query.customerId));
   const presents = process.env.ANALYTICS_BACKEND === "bigquery" ? await loadPresents(query) : mockPresents(visits);
   return buildMaidVisitLogs(visits, data.maids, data.customers, presents);
+}
+
+/**
+ * 閲覧者に応じたご帰宅明細を返す。
+ *
+ * **順序が重要**: プレゼントは BigQuery から元のHMAC customerId で返るため、
+ * 先に匿名化してしまうと結合キーが一致せず、maid には常に「アイテム使用0件」と表示される。
+ * 元のIDでサーバー内結合を済ませてから、完成したログを匿名化する。
+ * HMAC ID と実名は maid のブラウザへ渡さない。
+ */
+export async function buildScopedVisitLogs(
+  data: AnalyticsData,
+  query: MaidVisitQuery,
+  viewer: Viewer,
+  presentsOverride?: PresentLike[],
+): Promise<MaidVisitLog[]> {
+  const visits = data.visits.filter((visit) =>
+    (!query.maidId || visit.maidId === query.maidId) && (!query.customerId || visit.customerId === query.customerId));
+  const presents = presentsOverride
+    ?? (process.env.ANALYTICS_BACKEND === "bigquery" ? await loadPresents(query) : mockPresents(visits));
+
+  // ここまでは元のHMAC IDのまま。結合が成立する。
+  const logs = buildMaidVisitLogs(visits, data.maids, data.customers, presents);
+  if (viewer.role === "admin") return logs;
+
+  // 完成したログを匿名化する。表示に必要な集計値は保持したまま、識別子だけ置き換える。
+  const aliases = new Map<string, string>();
+  for (const visit of visits) {
+    if (!aliases.has(visit.customerId)) {
+      aliases.set(visit.customerId, `segment-${String(aliases.size + 1).padStart(3, "0")}`);
+    }
+  }
+  return logs.map((log) => ({
+    ...log,
+    customerId: aliases.get(log.customerId) ?? "segment-000",
+    customerName: "非表示",
+  }));
 }
 
 // デモ用: 4回に1回プレゼントがあったことにする。

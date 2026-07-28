@@ -1,4 +1,4 @@
-import type { AnalyticsData, Granularity, Viewer, Visit } from "./types";
+import type { AnalyticsData, Customer, Granularity, Viewer, ViewerScopedData, Visit } from "./types";
 import {
   businessDateJst,
   CHEKI_PRICE,
@@ -24,30 +24,67 @@ export function enforceMaidScope(viewer: Viewer, requestedMaidId?: string) {
   return requestedMaidId || undefined;
 }
 
-export function scopeDataForViewer(data: AnalyticsData, viewer: Viewer): AnalyticsData {
+/**
+ * maid へ返してよい顧客の列（allowlist）。
+ *
+ * ここに書かれた列**だけ**が maid のブラウザへ渡る。Customer 型に列が増えても
+ * 自動的には漏れない。性別・生年・ランク・残高・課金額などの準識別子と財務情報は、
+ * 表示名を segment-00N に置換しても組み合わせで個人を再識別され得るため一切返さない。
+ */
+export interface MaidScopedCustomer {
+  id: string; // segment-00N（元のHMAC IDではない）
+  name: string; // 常に "非表示"
+  registeredAt: string | null; // 年月まで（YYYY-MM）
+  // rank は個票として返さない。構成比が必要な場合は rankBreakdown を使う。
+}
+
+/** maid 画面のランク構成は行データではなく集計済み件数で渡す。 */
+export type RankBreakdown = Array<{ rank: string; customers: number }>;
+
+export interface MaidScopedData extends Omit<AnalyticsData, "customers"> {
+  customers: MaidScopedCustomer[];
+  rankBreakdown: RankBreakdown;
+}
+
+/** 元のHMAC IDから segment-00N への対応表を作る（サーバー内でのみ使う）。 */
+export function buildCustomerAliases(visits: Visit[]): Map<string, string> {
+  const sourceCustomerIds = [...new Set(visits.map((visit) => visit.customerId))];
+  return new Map(sourceCustomerIds.map((id, index) => [id, `segment-${String(index + 1).padStart(3, "0")}`]));
+}
+
+export function scopeDataForViewer(data: AnalyticsData, viewer: Viewer): AnalyticsData | MaidScopedData {
   if (viewer.role === "admin") return data;
   const maidId = enforceMaidScope(viewer);
   const visits = data.visits.filter((visit) => visit.maidId === maidId);
   const shifts = data.shifts.filter((shift) => shift.maidId === maidId);
-  const sourceCustomerIds = [...new Set(visits.map((visit) => visit.customerId))];
-  const aliases = new Map(sourceCustomerIds.map((id, index) => [id, `segment-${String(index + 1).padStart(3, "0")}`]));
+  const aliases = buildCustomerAliases(visits);
+  const scopedCustomers = data.customers.filter((customer) => aliases.has(customer.id));
+
+  // ランクは個票では返さず、件数だけを集計して渡す。
+  const rankCounts = new Map<string, number>();
+  for (const customer of scopedCustomers) {
+    const rank = customer.rank || "未設定";
+    rankCounts.set(rank, (rankCounts.get(rank) || 0) + 1);
+  }
+
   return {
-    ...data,
+    generatedAt: data.generatedAt,
     maids: data.maids.filter((maid) => maid.id === maidId),
-    customers: data.customers
-      .filter((customer) => aliases.has(customer.id))
-      .map((customer) => ({
-        ...customer,
-        id: aliases.get(customer.id)!,
-        name: "非表示",
-        registeredAt: customer.registeredAt?.slice(0, 7) ?? null,
-      })),
+    // スプレッド展開は使わない。列を明示して構築する。
+    customers: scopedCustomers.map((customer): MaidScopedCustomer => ({
+      id: aliases.get(customer.id)!,
+      name: "非表示",
+      registeredAt: customer.registeredAt?.slice(0, 7) ?? null,
+    })),
+    rankBreakdown: [...rankCounts.entries()].map(([rank, customers]) => ({ rank, customers })),
     visits: visits.map((visit) => ({ ...visit, customerId: aliases.get(visit.customerId)! })),
     shifts,
   };
 }
 
-export function filterData(data: AnalyticsData, viewer: Viewer, filter: AnalyticsFilter): AnalyticsData {
+// 入力の型（AnalyticsData / maidスコープ済み）をそのまま保つジェネリック。
+// admin経路で Customer 全列が失われないようにするため。
+export function filterData<T extends ViewerScopedData>(data: T, viewer: Viewer, filter: AnalyticsFilter): T {
   const maidId = enforceMaidScope(viewer, filter.maidId);
   // 営業日(0:00〜1:59は前日)で絞る。"YYYY-MM-DD"の文字列比較は時系列比較と一致する。
   const inRange = (iso: string) => {
@@ -67,7 +104,7 @@ export function filterData(data: AnalyticsData, viewer: Viewer, filter: Analytic
   };
 }
 
-export function summarize(data: AnalyticsData) {
+export function summarize(data: ViewerScopedData) {
   // 売上・ご帰宅数はcore.pyと一致させる（チェキ単価は定数、ご帰宅数・有料数は重み付き）。
   const revenue = data.visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0);
   const customerCount = new Set(data.visits.map((v) => v.customerId)).size;
@@ -112,7 +149,7 @@ export function buildTrend(visits: Visit[], granularity: Granularity) {
   return [...map.values()].sort((a, b) => a.sortAt - b.sortAt);
 }
 
-export function maidRows(data: AnalyticsData) {
+export function maidRows(data: ViewerScopedData) {
   const rows = data.maids.map((maid) => {
     const visits = data.visits.filter((v) => v.maidId === maid.id);
     const shifts = data.shifts.filter((s) => s.maidId === maid.id);
@@ -135,13 +172,16 @@ export function maidRows(data: AnalyticsData) {
     .sort((a, b) => b.score - a.score);
 }
 
-export function customerRows(data: AnalyticsData) {
-  return data.customers.map((customer) => {
+export function customerRows(data: ViewerScopedData) {
+  return data.customers.map((raw) => {
+    // maid スコープでは rank 等の列が存在しない。欠損を前提に既定値へ正規化する。
+    const customer = raw as Customer;
     const visits = data.visits.filter((v) => v.customerId === customer.id).sort((a, b) => b.at.localeCompare(a.at));
     const favorite = data.maids.map((maid) => ({ name: maid.name, count: visits.filter((v) => v.maidId === maid.id).length })).sort((a, b) => b.count - a.count)[0];
     const spend = visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0);
     return {
       ...customer,
+      rank: customer.rank ?? "非表示",
       // 表示・ソートを単純にするため、未同期(null/undefined)の数値は0、日付は空文字に正規化する。
       gender: customer.gender ?? "",
       birthYear: customer.birthYear ?? 0,

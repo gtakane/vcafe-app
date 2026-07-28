@@ -161,3 +161,24 @@ export interface MaidReportsResult {
   reports: MaidMonthlyReport[];
 }
 
+
+/** プレゼント（アイテム使用）の結合用の最小形。customerId は元のHMAC ID。 */
+export interface PresentLike {
+  customerId: string;
+  maidId: string;
+  at: string;
+  itemName: string;
+  quantity: number;
+}
+
+/**
+ * 閲覧者スコープ適用後の分析データ。
+ * admin は Customer 全列、maid は allowlist 済みの最小列（rank 等を持たない）。
+ * 画面はこの union を受け取り、欠損列に依存しない実装にする。
+ */
+export type ViewerScopedCustomer = Customer | { id: string; name: string; registeredAt: string | null };
+
+export interface ViewerScopedData extends Omit<AnalyticsData, "customers"> {
+  customers: ViewerScopedCustomer[];
+  rankBreakdown?: Array<{ rank: string; customers: number }>;
+}

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
-import { enforceMaidScope, scopeDataForViewer } from "@/lib/analytics";
+import { enforceMaidScope } from "@/lib/analytics";
 import { loadAnalyticsData } from "@/lib/data-source";
-import { loadMaidVisitLogs } from "@/lib/maid-visits";
+import { buildScopedVisitLogs } from "@/lib/maid-visits";
 import { parseAnalyticsRange } from "@/lib/date-range";
 
 // メイド個別／ユーザー個別のご帰宅明細。メイドは自分の分のみ参照できる。
@@ -17,8 +17,12 @@ export async function GET(request: NextRequest) {
   // ユーザー個別の明細は管理者のみ（メイド画面では個人が特定できないようにする）。
   const customerId = viewer.role === "admin" ? params.get("customerId") || undefined : undefined;
   try {
-    const data = scopeDataForViewer(await loadAnalyticsData({ start, end, maidId }), viewer);
-    const logs = await loadMaidVisitLogs(data, { maidId, customerId, start, end });
+    // 匿名化は buildScopedVisitLogs の内部で、プレゼント結合の**後**に行う。
+    // ここで先に scopeDataForViewer を通すと customerId が segment-00N になり、
+    // BigQuery が返すHMAC IDと結合できずアイテム使用が常に0件になる。
+    // maidId は enforceMaidScope で自分のIDに強制済みのため、他メイドのデータは読まれない。
+    const data = await loadAnalyticsData({ start, end, maidId });
+    const logs = await buildScopedVisitLogs(data, { maidId, customerId, start, end }, viewer);
     return NextResponse.json({ logs }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     console.error("ご帰宅明細の取得に失敗しました", error);
