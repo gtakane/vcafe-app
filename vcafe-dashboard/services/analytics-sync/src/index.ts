@@ -161,9 +161,24 @@ async function syncAllUsers() {
   console.info(JSON.stringify({ allUsers: { synced: total, excludedTestUsers: skipped } }));
 }
 
-// メイドレポートは実行ごとに1回だけ同期（SKIP_MAID_REPORTS=trueで無効化可）。
-if (process.env.SKIP_MAID_REPORTS !== "true") {
+// メイドレポート(月次)は本番を全件読むため負荷が大きい。毎時の同期では読まず、
+// 既定では JST の指定時刻(MAID_REPORTS_HOUR_JST、既定5時)の実行時のみ取り込む。
+//   MAID_REPORTS=always … 毎回取り込む（バックフィル時など明示的に使う）
+//   MAID_REPORTS=never  … 取り込まない
+// 旧 SKIP_MAID_REPORTS=true も互換のため never として扱う。
+function shouldSyncMaidReports(): boolean {
+  const mode = (process.env.MAID_REPORTS || "").trim().toLowerCase();
+  if (process.env.SKIP_MAID_REPORTS === "true" || mode === "never") return false;
+  if (mode === "always") return true;
+  const hour = Number(process.env.MAID_REPORTS_HOUR_JST ?? 5);
+  const jstHour = new Date(Date.now() + 9 * 3600000).getUTCHours();
+  return Number.isInteger(hour) ? jstHour === hour : true;
+}
+
+if (shouldSyncMaidReports()) {
   await syncMaidReports();
+} else {
+  console.info("MAID_REPORTS_SKIPPED 本番の読み取り負荷を抑えるため今回は月次レポートを同期しません");
 }
 
 // 全会員の同期（SYNC_ALL_USERS=true のときのみ）。初回およびユーザー属性を最新化したいときに使う。
