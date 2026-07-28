@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { buildTrend, customerRows, filterData, summarize } from "@/lib/analytics";
+import { buildTrend, crossVisitCounts, customerRows, filterData, summarize } from "@/lib/analytics";
 import type { AttendanceSubmission, Customer, Granularity, Maid, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Shift, Viewer, ViewerScopedData } from "@/lib/types";
 import type { GrowthMetrics } from "@/lib/growth";
 // 座席定数はサーバー依存の無い metrics から取る（growth は BigQuery を読み込むため）。
@@ -145,6 +145,7 @@ const CUSTOMER_COLUMNS: Array<{ key: keyof CustomerRow; label: string; kind: "te
   { key: "birthYear", label: "生年", kind: "year" },
   { key: "registeredAt", label: "登録日", kind: "date" },
   { key: "visits", label: "ご帰宅(期間)", kind: "num" },
+  { key: "sessions", label: "来店セッション数", kind: "num" },
   { key: "paidVisits", label: "有料", kind: "num" },
   { key: "reservations", label: "予約", kind: "num" },
   { key: "cheki", label: "チェキ", kind: "num" },
@@ -640,11 +641,8 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
   const trend = buildTrend(data.visits, granularity);
   const customerStats = customerRows(data);
   // ご帰宅クロスは一度だけ集計する（ユーザー×メイド×訪問の総当たりを避ける）。
-  const crossCounts = useMemo(() => {
-    const map = new Map<string, number>();
-    data.visits.forEach((v) => { const key = `${v.customerId}|${v.maidId}`; map.set(key, (map.get(key) || 0) + 1); });
-    return map;
-  }, [data.visits]);
+  // ご帰宅数の定義は lib/analytics.ts に集約する（画面側で +1 すると概要と食い違う）。
+  const crossCounts = useMemo(() => crossVisitCounts(data.visits), [data.visits]);
   const knownRankOrder = ["プラチナ", "ゴールド", "シルバー", "ブロンズ", "未設定"];
   const visibleRanks = [...new Set(customerStats.map((customer) => customer.rank))].sort((a, b) => {
     const aIndex = knownRankOrder.indexOf(a); const bIndex = knownRankOrder.indexOf(b);

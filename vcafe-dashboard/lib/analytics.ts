@@ -177,7 +177,10 @@ export function customerRows(data: ViewerScopedData) {
     // maid スコープでは rank 等の列が存在しない。欠損を前提に既定値へ正規化する。
     const customer = raw as Customer;
     const visits = data.visits.filter((v) => v.customerId === customer.id).sort((a, b) => b.at.localeCompare(a.at));
-    const favorite = data.maids.map((maid) => ({ name: maid.name, count: visits.filter((v) => v.maidId === maid.id).length })).sort((a, b) => b.count - a.count)[0];
+    // 最推しメイドは「どのメイドに多く通ったか」なので重み付きで比較する。
+    const favorite = data.maids
+      .map((maid) => ({ name: maid.name, count: weightedVisitCount(visits.filter((v) => v.maidId === maid.id)) }))
+      .sort((a, b) => b.count - a.count)[0];
     const spend = visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0);
     return {
       ...customer,
@@ -197,7 +200,10 @@ export function customerRows(data: ViewerScopedData) {
       maxConsecutiveVisitDays: customer.maxConsecutiveVisitDays ?? 0,
       paymentCount: customer.paymentCount ?? 0,
       paymentAmount: customer.paymentAmount ?? 0,
-      visits: visits.length,
+      // 「ご帰宅数」は重み付き（滞在40分=2件分）。概要・メイド別・クロス表と同一定義。
+      visits: weightedVisitCount(visits),
+      // 生の来店回数が必要な場合はこちら（重みを掛けない実回数）。
+      sessions: visits.length,
       spend,
       paidVisits: visits.filter((v) => isPaid(v.type)).length,
       reservations: visits.filter((v) => v.type === "reservation").length,
@@ -209,4 +215,18 @@ export function customerRows(data: ViewerScopedData) {
       lastVisit: visits[0]?.at.slice(0, 10) || "—",
     };
   }).sort((a, b) => b.visits - a.visits);
+}
+
+
+/**
+ * メイド×ユーザーのご帰宅数（重み付き）。キーは `${customerId}|${maidId}`。
+ * 画面側で +1 していた実装は滞在40分を1件と数えており、概要と一致していなかった。
+ */
+export function crossVisitCounts(visits: Visit[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const visit of visits) {
+    const key = `${visit.customerId}|${visit.maidId}`;
+    map.set(key, (map.get(key) || 0) + (visit.weight ?? 1));
+  }
+  return map;
 }

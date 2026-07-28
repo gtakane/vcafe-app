@@ -1,0 +1,45 @@
+{
+  "__doc__": "PythonとTypeScriptの丸め規則の契約。両言語のテストがこのfixtureを読んで同じ値を出すことを検証する。",
+  "rule": {
+    "name": "half-up",
+    "description": "0.5は常に切り上げる（日本の商習慣の四捨五入）。Pythonの組み込みround()は偶数丸めのため使用しない。",
+    "canonical": "TypeScript (lib/metrics.ts)",
+    "reason": "Pythonの偶数丸めは意図した業務仕様ではなく実装由来の挙動。core.py を TypeScript 側に合わせる。"
+  },
+  "visitWeight": [
+    { "initialTime": null, "expected": 1, "note": "未設定は既定20分扱い" },
+    { "initialTime": 0, "expected": 1, "note": "0は既定20分扱い" },
+    { "initialTime": 10, "expected": 1 },
+    { "initialTime": 20, "expected": 1 },
+    { "initialTime": 30, "expected": 2, "note": "1.5 → 切り上げ" },
+    { "initialTime": 40, "expected": 2 },
+    { "initialTime": 50, "expected": 3, "note": "2.5 → 切り上げ。Pythonの偶数丸めでは2になり不一致だった" },
+    { "initialTime": 60, "expected": 3 },
+    { "initialTime": 70, "expected": 4, "note": "3.5 → 切り上げ" },
+    { "initialTime": 90, "expected": 5, "note": "4.5 → 切り上げ。偶数丸めでは4" },
+    { "initialTime": 130, "expected": 7, "note": "6.5 → 切り上げ。偶数丸めでは6" },
+    { "initialTime": 9.9, "expected": 1, "note": "リワードP払いの実測小数" },
+    { "initialTime": -10, "expected": 1, "note": "負値は既定20分扱い" },
+    { "initialTime": "40", "expected": 2, "note": "数値文字列" }
+  ],
+  "visitRevenue": [
+    { "type": "paid", "ticketId": "gokitaku30minutes", "billedCoin": 0, "billedReward": 0, "expected": 840, "note": "既知チケットは定価" },
+    { "type": "paid", "ticketId": "premiumGokitaku1", "billedCoin": 0, "billedReward": 0, "expected": 960 },
+    { "type": "paid", "ticketId": "luckyGokitaku", "billedCoin": 0, "billedReward": 0, "expected": 650 },
+    { "type": "reservation", "ticketId": "ATCOIN", "billedCoin": 0, "billedReward": 0, "expected": 3920 },
+    { "type": "trial", "ticketId": "trial10minutes", "billedCoin": 0, "billedReward": 0, "expected": 0 },
+    { "type": "paid", "ticketId": "ATCOIN", "billedCoin": 600, "billedReward": 0, "expected": 840 },
+    { "type": "paid", "ticketId": "ATCOIN", "billedCoin": 0, "billedReward": 310, "expected": 434 },
+    { "type": "paid", "ticketId": "ATCOIN", "billedCoin": 0, "billedReward": 0, "expected": 0, "note": "コイン0でも無料ではない" },
+    { "type": "paid", "ticketId": "ATCOIN", "billedCoin": 25, "billedReward": 0, "expected": 35, "note": "25*1.4=35.0" },
+    { "type": "paid", "ticketId": "ATCOIN", "billedCoin": 375, "billedReward": 0, "expected": 525, "note": "375*1.4=525.0" },
+    { "type": "paid", "ticketId": "unknownTicket999", "billedCoin": 100, "billedReward": 0, "expected": 140, "note": "未知チケットはコイン換算" }
+  ],
+  "businessDateJst": [
+    { "atIso": "2026-07-21T10:00:00Z", "expected": "2026-07-21", "note": "JST 19:00" },
+    { "atIso": "2026-07-21T14:59:59Z", "expected": "2026-07-21", "note": "JST 23:59:59" },
+    { "atIso": "2026-07-21T15:00:00Z", "expected": "2026-07-21", "note": "JST 翌0:00 → 前営業日" },
+    { "atIso": "2026-07-21T16:59:59Z", "expected": "2026-07-21", "note": "JST 翌1:59:59 → 前営業日" },
+    { "atIso": "2026-07-21T17:00:00Z", "expected": "2026-07-22", "note": "JST 翌2:00:00 → 翌営業日" }
+  ]
+}

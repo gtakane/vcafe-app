@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 
 import pandas as pd
+import core_metrics  # 収益・重み・営業日の共通ロジック（TypeScript側 lib/metrics.ts と同一契約）
 
 
 # ============================================================
@@ -165,7 +166,8 @@ def _calc_revenue(ticket_id: str, billed_coin: int, billed_reward: int,
         return float(RESERVATION_PRICE)
     if ticket_id in TICKET_PRICES:
         return float(TICKET_PRICES[ticket_id])
-    return round((billed_coin + billed_reward) * 1.4, 0)
+    # 偶数丸めを避け TypeScript(Math.round) と同じ half-up にそろえる。
+    return float(core_metrics.round_half_up((billed_coin + billed_reward) * core_metrics.COIN_TO_YEN))
 
 
 def _classify_type(ticket_id: str, is_test: bool) -> str:
@@ -224,7 +226,7 @@ def fetch_visits(db, start_jst: datetime, end_jst: datetime) -> pd.DataFrame:
         ticket        = str(d.get("usedTicketItemId") or "ATCOIN")
         room_type     = str(d.get("roomType") or "")
         init_time     = int(d.get("initialTime") or 20)
-        weight        = max(1, round(init_time / 20))
+        weight        = core_metrics.visit_weight(init_time)  # half-up（TypeScript と同一契約）
         rows.append({
             "doc_id":            doc.id,
             "userId":            doc.reference.parent.parent.id,
