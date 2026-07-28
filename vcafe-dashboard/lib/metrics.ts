@@ -13,6 +13,13 @@
 
 import type { Shift, Visit } from "./types";
 
+// 座席モデル: 同時に最大3名着席可、1枠=20分（重みの単位と一致）。
+// よってメイド1時間の稼働 = 3席 × 3枠/時 = 最大9名分の利用枠。
+// クライアント(dashboard.tsx)からも参照するため、サーバー依存の無い本ファイルに置く。
+export const SEATS_PER_MAID = 3;
+export const SLOTS_PER_HOUR = 3; // 60分 / 20分
+export const CAPACITY_PER_MAID_HOUR = SEATS_PER_MAID * SLOTS_PER_HOUR; // = 9
+
 export const TICKET_PRICES: Record<string, number> = {
   gokitaku30minutes: 840,
   premiumGokitaku1: 960,

@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { buildTrend, customerRows, filterData, summarize } from "@/lib/analytics";
 import type { AnalyticsData, AttendanceSubmission, Customer, Granularity, Maid, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Shift, Viewer } from "@/lib/types";
 import type { GrowthMetrics } from "@/lib/growth";
+// 座席定数はサーバー依存の無い metrics から取る（growth は BigQuery を読み込むため）。
+import { SEATS_PER_MAID } from "@/lib/metrics";
 import LogoutButton from "@/components/logout-button";
 
 type View = "overview" | "maids" | "growth" | "users" | "relations" | "attendance";
@@ -202,8 +204,21 @@ function VisitLogTable({ logs, hideMaid, hideCustomer, onExport, exportName, ser
   return <>
     <div className="log-summary">
       <span><b>{number.format(logs.length)}</b>件</span>
-      <span title="ユーザーごとの滞在分の合計。同時に最大3名が着席できるため、実お給仕時間より大きくなります">延べ滞在 <b>{number.format(totals.minutes)}</b>分</span>
-      {serveMinutes != null && serveMinutes > 0 && <span title="この期間の実お給仕時間（打刻ベース）。延べ滞在は同時着席のぶん、これを超えます">実お給仕 <b>{number.format(Math.round(serveMinutes))}</b>分</span>}
+      <span title={`ユーザーごとの滞在分の合計。同時に最大${SEATS_PER_MAID}名が着席できるため、実お給仕時間の最大${SEATS_PER_MAID}倍まで大きくなります`}>延べ滞在 <b>{number.format(totals.minutes)}</b>分</span>
+      {serveMinutes != null && serveMinutes > 0 && <>
+        <span title="この期間の実お給仕時間（打刻ベース）">実お給仕 <b>{number.format(Math.round(serveMinutes))}</b>分</span>
+        {/* 延べ滞在 ÷ (実お給仕 × 席数) が席の埋まり具合。100%超は席数を超える計上＝データ異常のサイン。 */}
+        {(() => {
+          const occupancy = totals.minutes / (serveMinutes * SEATS_PER_MAID);
+          const over = occupancy > 1;
+          return <span title={over
+            ? `延べ滞在が席数(${SEATS_PER_MAID}席)の上限を超えています。ご帰宅の重複計上か、打刻漏れの可能性があります`
+            : `席の埋まり具合。延べ滞在 ÷ (実お給仕 × ${SEATS_PER_MAID}席)`}
+            style={over ? { color: "#d6336c", fontWeight: 600 } : undefined}>
+            席占有率 <b>{(occupancy * 100).toFixed(1)}%</b>{over ? " ⚠ 要確認" : ""}
+          </span>;
+        })()}
+      </>}
       <span>売上 <b>{yen.format(totals.revenue)}</b></span>
       <span>チェキ <b>{number.format(totals.cheki)}</b>枚</span>
       <span>アイテム使用 <b>{number.format(totals.presents)}</b></span>

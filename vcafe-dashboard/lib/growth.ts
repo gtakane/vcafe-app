@@ -2,11 +2,10 @@ import { businessDateJst, isPaid, shiftActualHours } from "./metrics.ts";
 import { mockAnalyticsData, customers as mockCustomers } from "./mock-data.ts";
 import type { Visit } from "./types";
 
-// 座席モデル: 同時に最大3名着席可、1枠=20分（重みの単位と一致）。
-// よってメイド1時間の稼働 = 3席 × 3枠/時 = 最大9名分の利用枠。
-export const SEATS_PER_MAID = 3;
-export const SLOTS_PER_HOUR = 3; // 60分 / 20分
-export const CAPACITY_PER_MAID_HOUR = SEATS_PER_MAID * SLOTS_PER_HOUR; // = 9
+// 座席モデルの定数は lib/metrics.ts（共通ロジックの正典）へ移動。
+// 既存の参照を壊さないよう再エクスポートしつつ、本ファイル内でも使う。
+import { CAPACITY_PER_MAID_HOUR } from "./metrics.ts";
+export { SEATS_PER_MAID, SLOTS_PER_HOUR, CAPACITY_PER_MAID_HOUR } from "./metrics.ts";
 
 // グロース指標（DAU・新規登録・新規課金転換率・離脱率・占有率/空席率）の算出。
 // すべて既存の同期データ（visits_current / customers_current / shifts_current）から導出でき、
