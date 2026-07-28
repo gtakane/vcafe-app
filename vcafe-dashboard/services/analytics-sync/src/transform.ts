@@ -95,14 +95,36 @@ export function mapShift(document: SourceDocument): ShiftRow | null {
   if (!scheduledStart || !scheduledEnd) return null;
   const starts = Array.isArray(document.data.serveStartTime) ? document.data.serveStartTime : [];
   const ends = Array.isArray(document.data.serveEndTime) ? document.data.serveEndTime : [];
+
+  // serveStartTime/serveEndTime は「お給仕セッションごと」の打刻の配列で、
+  // 並び順も要素数も保証されない。本番には誤タップで数十秒だけ開閉した記録や、
+  // 最後のセッションが閉じられず終了打刻が1件少ない行が存在する。
+  // 添字([0] / at(-1))で取ると、そうした行で終了が開始の直後になり
+  // お給仕時間が「26秒」のように潰れるため、最小・最大で取る。
+  const toMillis = (value: unknown) => {
+    const iso = firestoreTimestampToIso(value);
+    const ms = iso ? Date.parse(iso) : Number.NaN;
+    return Number.isFinite(ms) ? ms : null;
+  };
+  const startMillis = starts.map(toMillis).filter((v): v is number => v !== null);
+  const endMillis = ends.map(toMillis).filter((v): v is number => v !== null);
+
+  const actualStart = startMillis.length ? new Date(Math.min(...startMillis)) : null;
+  // 終了打刻が開始打刻より少ない＝最後のセッションが閉じていない。
+  // いつ終えたか分からないため未打刻として扱い、予定時刻で補完させる（core.py の fillna と同じ）。
+  const closed = endMillis.length > 0 && endMillis.length >= startMillis.length;
+  const endCandidate = closed ? new Date(Math.max(...endMillis)) : null;
+  // 終了が開始以前の記録は使わない（誤タップ等）。
+  const actualEnd = endCandidate && actualStart && endCandidate <= actualStart ? null : endCandidate;
+
   return {
     id: document.id,
     maidId: String(document.data.maidId || `nickname:${String(document.data.maidNickname || "unknown")}`),
     maidName: String(document.data.maidNickname || "名称未設定"),
     scheduledStart,
     scheduledEnd,
-    actualStart: starts.length ? firestoreTimestampToIso(starts[0]) : null,
-    actualEnd: ends.length ? firestoreTimestampToIso(ends.at(-1)) : null,
+    actualStart: actualStart ? actualStart.toISOString() : null,
+    actualEnd: actualEnd ? actualEnd.toISOString() : null,
   };
 }
 

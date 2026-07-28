@@ -127,3 +127,37 @@ test("mapPayment/mapPurchase: source列で由来を区別できる", () => {
   assert.equal(pay.source, "payments");
   assert.equal(buy.source, "purchaseLog");
 });
+
+test("mapShift: 打刻配列の並び順が乱れていても最小・最大で実績を取る", () => {
+  const shift = mapShift({ id: "s1", data: {
+    maidId: "m1", maidNickname: "まゆら",
+    openTime: timestamp("2026-07-21T12:00:00Z"), closeTime: timestamp("2026-07-21T17:00:00Z"),
+    // 並びが時系列でない（本番の arrayUnion では順序が保証されない）
+    serveStartTime: [timestamp("2026-07-21T14:00:00Z"), timestamp("2026-07-21T11:51:00Z")],
+    serveEndTime: [timestamp("2026-07-21T11:51:27Z"), timestamp("2026-07-21T16:55:00Z")],
+  } })!;
+  assert.equal(shift.actualStart, "2026-07-21T11:51:00.000Z"); // 最小
+  assert.equal(shift.actualEnd, "2026-07-21T16:55:00.000Z");   // 最大（誤タップの11:51:27ではない）
+});
+
+test("mapShift: 終了打刻が足りない（セッション未クローズ）なら未打刻として扱う", () => {
+  // 本番実例: 開始が3回・終了が1回。at(-1) では 26秒のお給仕時間になっていた。
+  const shift = mapShift({ id: "s2", data: {
+    maidId: "m1", maidNickname: "まゆら",
+    openTime: timestamp("2026-07-27T12:00:00Z"), closeTime: timestamp("2026-07-27T17:00:00Z"),
+    serveStartTime: [timestamp("2026-07-27T11:51:01Z"), timestamp("2026-07-27T12:30:00Z"), timestamp("2026-07-27T14:00:00Z")],
+    serveEndTime: [timestamp("2026-07-27T11:51:27Z")],
+  } })!;
+  assert.equal(shift.actualStart, "2026-07-27T11:51:01.000Z");
+  assert.equal(shift.actualEnd, null); // 予定の closeTime で補完される
+});
+
+test("mapShift: 終了が開始以前の記録は採用しない", () => {
+  const shift = mapShift({ id: "s3", data: {
+    maidId: "m1", maidNickname: "まゆら",
+    openTime: timestamp("2026-07-21T12:00:00Z"), closeTime: timestamp("2026-07-21T17:00:00Z"),
+    serveStartTime: [timestamp("2026-07-21T12:05:00Z")],
+    serveEndTime: [timestamp("2026-07-21T12:00:00Z")],
+  } })!;
+  assert.equal(shift.actualEnd, null);
+});
