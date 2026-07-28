@@ -51,4 +51,12 @@ gcloud run jobs deploy "${JOB_NAME}" \
 
 echo "Deployed ${JOB_NAME} in ${REGION} with production reads disabled."
 echo "No production IAM role was granted and the job was not executed."
+echo
+echo "★重要: このデプロイで環境変数は disabled.env.yaml の内容に置き換わりました"
+echo "  （CONFIRM_READ_ONLY_SYNC=DISABLED / MAX_DOCUMENTS=100 / DRY_RUN=true）。"
+echo "  このままでは同期は起動時に停止します。実行する前に必ず次を適用してください:"
+echo
+echo "  gcloud run jobs update ${JOB_NAME} --region ${REGION} \\"
+echo "    --update-env-vars CONFIRM_READ_ONLY_SYNC=I_UNDERSTAND_THIS_READS_PRODUCTION,MAX_DOCUMENTS=5000,SYNC_LOOKBACK_MINUTES=90,DRY_RUN=false \\"
+echo "    --set-secrets CUSTOMER_ID_HMAC_SECRET=vcafe-customer-id-hmac:latest"
 
