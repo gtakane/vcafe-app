@@ -5,5 +5,6 @@ node_modules/
 .env.local
 *.log
 .firebase/
+.deploy-state/
 serviceAccountKey*.json
 *.tsbuildinfo

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# smoke-test-revision.sh の代わりに使うモック。
+# SMOKE_RESULT_FILE の中身が "pass" なら成功、それ以外は失敗として終了する。
+set -euo pipefail
+FLAG_FILE="${SMOKE_RESULT_FILE:?SMOKE_RESULT_FILE is required}"
+result="$(cat "${FLAG_FILE}")"
+if [[ "${result}" == "pass" ]]; then
+  echo "mock smoke test: OK"
+  exit 0
+fi
+echo "mock smoke test: FAIL" >&2
+exit 1

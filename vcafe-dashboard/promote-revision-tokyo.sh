@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # 検証済みリビジョンへトラフィックを切り替える。
 #
-#   bash promote-revision-tokyo.sh vcafe-dashboard-abc1234-0728-1200
+#   CONFIRM_MANUAL_UI_CHECK=yes bash promote-revision-tokyo.sh vcafe-dashboard-abc1234-0728-1200
 #
-# 実行前にスモークテストが成功していること。
-# Firebase Hosting は firebase.json で pinTag: true を使っているため、
-# Cloud Run のトラフィック切替だけでは Hosting 経由の配信は切り替わらない。
-# 両方を切り替える。
+# 実行前にスモークテストが成功していること、かつ管理者ログイン後の主要6画面
+# （analytics/attendance-submissions/customers/growth/maid-reports/visit-logs）
+# をブラウザで手動確認していること。
+#
+# firebase.json の Hosting rewrite から pinTag を外し、Cloud Run のトラフィック
+# 分割だけで配信先が決まる設計にしている（以前は pinTag: true により、Hosting
+# 側の再デプロイが「現在100%トラフィックのリビジョン」ではなく「最後に作成された
+# リビジョン（カナリアを含む）」にピン留めされる恐れがあった）。
+# pinTag 解除の firebase.json への反映（= firebase deploy --only hosting の実行）
+# は本スクリプトの対象外。反映済みであることを前提とし、未反映なら以下で停止する。
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-vcafe-admin-analytics}"
@@ -14,12 +20,37 @@ REGION="${REGION:-asia-northeast1}"
 SERVICE_NAME="${SERVICE_NAME:-vcafe-dashboard}"
 NEW_REVISION="${1:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SMOKE_TEST_SCRIPT="${SMOKE_TEST_SCRIPT:-${SCRIPT_DIR}/smoke-test-revision.sh}"
+FIREBASE_CONFIG_PATH="${FIREBASE_CONFIG_PATH:-${SCRIPT_DIR}/firebase.json}"
+STATE_DIR="${DEPLOY_STATE_DIR:-${SCRIPT_DIR}/.deploy-state}"
 cd "${SCRIPT_DIR}"
 
 if [[ -z "${NEW_REVISION}" ]]; then
-  echo "usage: bash promote-revision-tokyo.sh <リビジョン名>" >&2
+  echo "usage: CONFIRM_MANUAL_UI_CHECK=yes bash promote-revision-tokyo.sh <リビジョン名>" >&2
   exit 2
 fi
+
+echo "=========================================================="
+echo " 0. 事前チェック"
+echo "=========================================================="
+
+if [[ "${CONFIRM_MANUAL_UI_CHECK:-no}" != "yes" ]]; then
+  echo "★ 管理者ログイン後の主要6画面を手動確認してから実行してください:" >&2
+  echo "  analytics / attendance-submissions / customers / growth / maid-reports / visit-logs" >&2
+  echo "  メイドアカウントがあれば、ユーザー名が非表示になっていることも確認すること。" >&2
+  echo "  確認済みなら CONFIRM_MANUAL_UI_CHECK=yes を付けて再実行してください。" >&2
+  exit 1
+fi
+echo "  管理者UI確認: 確認済み（CONFIRM_MANUAL_UI_CHECK=yes）"
+
+if grep -qE '"pinTag"\s*:\s*true' "${FIREBASE_CONFIG_PATH}" 2>/dev/null; then
+  echo "★ ${FIREBASE_CONFIG_PATH} に pinTag: true が残っています。" >&2
+  echo "  pinTag が有効な間は、Cloud Run のトラフィック切替だけでは Hosting 経由の配信が" >&2
+  echo "  切り替わりません（Hosting は別途 firebase deploy --only hosting でしか動かない）。" >&2
+  echo "  pinTag 解除を firebase deploy --only hosting で反映してから、このスクリプトを使ってください。" >&2
+  exit 1
+fi
+echo "  pinTag: firebase.json に残っていないことを確認"
 
 DESCRIBE=(gcloud run services describe "${SERVICE_NAME}" --region="${REGION}" --project="${PROJECT_ID}")
 
@@ -32,11 +63,24 @@ for t in data.get('status',{}).get('traffic',[]):
         break
 ")"
 
+if [[ -z "${PREVIOUS_REVISION}" ]]; then
+  echo "★ 現在100%トラフィックを受けているリビジョンを特定できませんでした。中止します。" >&2
+  exit 1
+fi
+
+mkdir -p "${STATE_DIR}"
+STATE_FILE="${STATE_DIR}/promote-$(date -u +%Y%m%dT%H%M%SZ).json"
+cat > "${STATE_FILE}" <<EOF
+{"action":"promote","service":"${SERVICE_NAME}","region":"${REGION}","project":"${PROJECT_ID}","previous_revision":"${PREVIOUS_REVISION}","new_revision":"${NEW_REVISION}"}
+EOF
+
+echo
 echo "=========================================================="
-echo " トラフィック切替"
+echo " 1. トラフィック切替"
 echo "=========================================================="
 echo "  切替前: ${PREVIOUS_REVISION}"
 echo "  切替後: ${NEW_REVISION}"
+echo "  状態保存: ${STATE_FILE}（失敗時の切り戻し先として使用可能）"
 echo
 echo "  現在のトラフィック:"
 "${DESCRIBE[@]}" --format='table(status.traffic.revisionName, status.traffic.percent, status.traffic.tag)'
@@ -52,30 +96,33 @@ echo
 echo "  切替後のトラフィック:"
 "${DESCRIBE[@]}" --format='table(status.traffic.revisionName, status.traffic.percent, status.traffic.tag)'
 
-echo
-echo "=========================================================="
-echo " Firebase Hosting の再ピン留め"
-echo "=========================================================="
-# firebase.json の rewrites は pinTag: true。Hosting は配備時点のリビジョンに
-# ピン留めされるため、Cloud Run 側を切り替えただけでは Hosting 経由が古いままになる。
-firebase use "${PROJECT_ID}"
-firebase deploy --only hosting --project "${PROJECT_ID}"
-
 SERVICE_URL="$("${DESCRIBE[@]}" --format='value(status.url)')"
-echo
-echo "=========================================================="
-echo " 切替後のスモークテスト"
-echo "=========================================================="
-bash "${SCRIPT_DIR}/smoke-test-revision.sh" "${SERVICE_URL}"
-SMOKE=$?
 
 echo
+echo "=========================================================="
+echo " 2. 切替後のスモークテスト"
+echo "=========================================================="
+# `cmd || SMOKE=$?` で受けることで、smoke-test-revision.sh が非0終了しても
+# set -e でスクリプトが即終了せず、下の自動ロールバック処理まで必ず到達する。
+SMOKE=0
+bash "${SMOKE_TEST_SCRIPT}" "${SERVICE_URL}" || SMOKE=$?
+
 if (( SMOKE != 0 )); then
-  echo "★ 切替後のスモークテストが失敗しました。直ちに戻してください:" >&2
-  echo "  bash rollback-revision-tokyo.sh ${PREVIOUS_REVISION}" >&2
+  echo
+  echo "★ 切替後のスモークテストが失敗しました。自動的に ${PREVIOUS_REVISION} へ戻します。" >&2
+  gcloud run services update-traffic "${SERVICE_NAME}" \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
+    --to-revisions="${PREVIOUS_REVISION}=100" \
+    --quiet
+  echo "★ 自動ロールバック完了: ${PREVIOUS_REVISION} が100%に戻りました。" >&2
+  "${DESCRIBE[@]}" --format='table(status.traffic.revisionName, status.traffic.percent, status.traffic.tag)' >&2
+  echo
+  echo "★ ${NEW_REVISION} は問題があるため、原因調査してから再度カナリアを作り直してください。" >&2
   exit 1
 fi
 
+echo
 echo "完了: ${NEW_REVISION} が100%を受けています。"
 echo
 echo "戻す場合: bash rollback-revision-tokyo.sh ${PREVIOUS_REVISION}"

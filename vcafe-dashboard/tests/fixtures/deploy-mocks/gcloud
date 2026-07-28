@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# promote-revision-tokyo.sh / rollback-revision-tokyo.sh が呼び出す gcloud サブコマンドの
+# うち、テストで必要な範囲だけを再現するモック。実物には一切アクセスしない。
+set -euo pipefail
+
+STATE_DIR="${MOCK_GCLOUD_STATE_DIR:?MOCK_GCLOUD_STATE_DIR is required}"
+STATE_FILE="${STATE_DIR}/current_revision.txt"
+CALL_LOG="${STATE_DIR}/gcloud_calls.log"
+
+printf '%s\n' "$*" >> "${CALL_LOG}"
+
+sub="$1 $2 $3"
+shift 3
+
+case "${sub}" in
+  "run services describe")
+    fmt=""
+    for a in "$@"; do
+      case "${a}" in
+        --format=*) fmt="${a#--format=}" ;;
+      esac
+    done
+    current="$(cat "${STATE_FILE}" 2>/dev/null || echo "unknown-revision")"
+    case "${fmt}" in
+      json)
+        printf '{"status":{"url":"https://mock.example.com","traffic":[{"revisionName":"%s","percent":100}]}}\n' "${current}"
+        ;;
+      "value(status.url)")
+        echo "https://mock.example.com"
+        ;;
+      *)
+        echo "REVISION_NAME  PERCENT  TAG"
+        echo "${current}  100"
+        ;;
+    esac
+    ;;
+  "run services update-traffic")
+    newrev=""
+    for a in "$@"; do
+      case "${a}" in
+        --to-revisions=*)
+          spec="${a#--to-revisions=}"
+          newrev="${spec%%=*}"
+          ;;
+      esac
+    done
+    echo "${newrev}" > "${STATE_FILE}"
+    ;;
+  "run revisions list")
+    echo "NAME          READY  CREATED"
+    echo "mock-rev-old  True   2026-01-01T00:00:00Z"
+    ;;
+  *)
+    echo "mock gcloud: unhandled invocation: ${sub} $*" >&2
+    exit 99
+    ;;
+esac

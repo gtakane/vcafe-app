@@ -80,6 +80,32 @@ bash services/analytics-sync/check-bigquery-schema.sh
 
 **トラフィックを移さずに新リビジョンを作り、検証してから切り替える。**
 
+### 手順2-0（初回のみ・要別途確認）: pinTag 解除の反映
+
+`firebase.json` の Hosting rewrite から `pinTag: true` を外した（コミット済み）。
+これは Cloud Run のトラフィック分割だけで配信先が決まる設計にするためで、
+以前の `pinTag: true` には次のバグがあった:
+
+> Hosting 再デプロイ時、`pinTag` は「現在100%トラフィックのリビジョン」ではなく
+> 「最後に作成されたリビジョン（0%トラフィックのカナリアを含む）」にピン留めされうる。
+> カナリア配備直後に誰かが `firebase deploy --only hosting` を実行すると、
+> 本番トラフィックが向いていない検証用リビジョンに Hosting が向いてしまう。
+> ロールバック時も同様に、直近に作られた不具合カナリアへ再ピン留めする恐れがあった。
+
+この firebase.json の変更を**実際に反映する**（＝ `firebase deploy --only hosting` を
+実行して Hosting 側の pinTag 設定を消す）のは、Cloud Run のトラフィック切替とは別の
+操作であり、本番の配信経路に影響する。**まだ反映していない。実行前に必ず確認を取ること。**
+
+```bash
+# 反映後は Hosting は常に Cloud Run のトラフィック分割をそのまま参照する。
+# 反映するまでは promote-revision-tokyo.sh / rollback-revision-tokyo.sh が
+# pinTag 残存を検知して自動的に停止する（意図した安全装置）。
+firebase use vcafe-admin-analytics
+firebase deploy --only hosting --project vcafe-admin-analytics
+```
+
+### 手順2-1〜2-4: カナリア配備 → 検証 → 切替
+
 ```bash
 cd ~/vcafe-app && git pull origin claude/nextjs-firebase-dashboard-review-w74yfo
 cd vcafe-dashboard
@@ -90,10 +116,12 @@ bash deploy-revision-tokyo.sh
 # 2-2. 検証用URLに対してスモークテスト（出力された URL を使う）
 bash smoke-test-revision.sh "<検証用URL>"
 
-# 2-3. 成功したら切替（Cloud Run のトラフィック + Hosting の再ピン留め）
-bash promote-revision-tokyo.sh <新リビジョン名>
+# 2-3. 管理者ログイン後の主要6画面をブラウザで手動確認してから切替
+#     （手順2-0が未反映だと、pinTag残存チェックで停止する）
+CONFIRM_MANUAL_UI_CHECK=yes bash promote-revision-tokyo.sh <新リビジョン名>
+# 切替後のスモークテストが失敗した場合は自動的に直前のリビジョンへ戻る。
 
-# 失敗したら戻す
+# 失敗が後から判明した場合の手動ロールバック
 bash rollback-revision-tokyo.sh <直前のリビジョン名>
 ```
 
@@ -101,10 +129,6 @@ bash rollback-revision-tokyo.sh <直前のリビジョン名>
 > 毎回 IAM ロールを付与し直し、`--allow-unauthenticated` を渡し、
 > `--env-vars-file` で環境変数を全置換し、Hosting まで即座に切り替える。
 > 検証前に本番トラフィックが新リビジョンへ移る。
->
-> Hosting は `firebase.json` で `pinTag: true` を使っているため、
-> **Cloud Run のトラフィック切替だけでは Hosting 経由の配信は切り替わらない。**
-> `promote-revision-tokyo.sh` は両方を行う。
 
 含まれる修正:
 
