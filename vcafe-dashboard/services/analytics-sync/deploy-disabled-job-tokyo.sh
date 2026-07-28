@@ -8,6 +8,12 @@ RUNTIME_SERVICE_ACCOUNT="vcafe-analytics-sync"
 RUNTIME_SERVICE_ACCOUNT_EMAIL="${RUNTIME_SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${JOB_NAME}:disabled"
 
+# どのディレクトリから実行しても動くよう、スクリプト位置からビルド文脈(vcafe-dashboard)を解決する。
+# cloudbuild.yaml / Dockerfile は vcafe-dashboard を起点とした相対パスを使うため、ここを揃える必要がある。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DASHBOARD_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+cd "${DASHBOARD_DIR}"
+
 if [[ "$(gcloud config get-value project 2>/dev/null)" != "${PROJECT_ID}" ]]; then
   gcloud config set project "${PROJECT_ID}"
 fi
