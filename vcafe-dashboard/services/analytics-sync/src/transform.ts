@@ -37,10 +37,17 @@ export function mapUser(document: SourceDocument, secret: string): Customer | nu
   return customer ? { ...customer, id: pseudonymizeCustomerId(customer.id, secret) } : null;
 }
 
-function maidId(document: SourceDocument, maidIdsByNickname: Map<string, string>) {
+/**
+ * 正規 maidId を解決する。確定できない場合は null を返し、呼び出し側で reject させる。
+ * 旧実装は `nickname:${...}` というフォールバックIDを作っていたが、
+ * それを通常集計に混ぜると同一メイドが2つのIDに分裂し、実績が二分される。
+ */
+function maidId(document: SourceDocument, maidIdsByNickname: Map<string, string>): string | null {
   const explicit = String(document.data.maidId || "").trim();
+  if (explicit) return explicit;
   const nickname = String(document.data.maidNickname || "").trim();
-  return explicit || maidIdsByNickname.get(nickname) || `nickname:${nickname || "unknown"}`;
+  if (!nickname) return null;
+  return maidIdsByNickname.get(nickname) ?? null;
 }
 
 export function mapVisit(document: SourceDocument, secret: string, maidIdsByNickname: Map<string, string>): Visit | null {
@@ -56,8 +63,11 @@ export function mapVisit(document: SourceDocument, secret: string, maidIdsByNick
   const revenue = visitRevenue(type, ticketId, billedCoin, billedReward);
   const minutes = numberValue(document.data.initialTime) || DEFAULT_INITIAL_TIME;
   const weight = visitWeight(minutes);
+  // メイドを確定できない行は集計へ混ぜず reject する（nickname:* による分裂を防ぐ）。
+  const resolvedMaidId = maidId(document, maidIdsByNickname);
+  if (!resolvedMaidId) return null;
   return {
-    id: document.id, at, maidId: maidId(document, maidIdsByNickname),
+    id: document.id, at, maidId: resolvedMaidId,
     customerId: pseudonymizeCustomerId(document.parentId, secret),
     type, revenue, cheki: 0, weight,
     // 明細表示用（どのチケットで何分、コイン払いか）。
@@ -70,10 +80,12 @@ export function mapPresent(document: SourceDocument, secret: string, maidIdsByNi
   if (!document.parentId) return null;
   const at = firestoreTimestampToIso(document.data.presentDateTime);
   if (!at) return null;
+  const resolvedMaidId = maidId(document, maidIdsByNickname);
+  if (!resolvedMaidId) return null;
   return {
     id: document.id,
     customerId: pseudonymizeCustomerId(document.parentId, secret),
-    maidId: maidId(document, maidIdsByNickname),
+    maidId: resolvedMaidId,
     at,
     itemName: String(document.data.itemName || "").trim() || "アイテム",
     category: String(document.data.category || ""),
@@ -86,10 +98,12 @@ export function mapCheki(document: SourceDocument, secret: string, maidIdsByNick
   if (!document.parentId) return null;
   const at = firestoreTimestampToIso(document.data.date);
   if (!at) return null;
-  return { id: document.id, customerId: pseudonymizeCustomerId(document.parentId, secret), maidId: maidId(document, maidIdsByNickname), at, syncedAt, sourceUpdatedAt: document.updatedAt || null };
+  const resolvedMaidId = maidId(document, maidIdsByNickname);
+  if (!resolvedMaidId) return null;
+  return { id: document.id, customerId: pseudonymizeCustomerId(document.parentId, secret), maidId: resolvedMaidId, at, syncedAt, sourceUpdatedAt: document.updatedAt || null };
 }
 
-export function mapShift(document: SourceDocument): ShiftRow | null {
+export function mapShift(document: SourceDocument, maidIdsByNickname: Map<string, string> = new Map()): ShiftRow | null {
   const scheduledStart = firestoreTimestampToIso(document.data.openTime);
   const scheduledEnd = firestoreTimestampToIso(document.data.closeTime);
   if (!scheduledStart || !scheduledEnd) return null;
@@ -117,9 +131,12 @@ export function mapShift(document: SourceDocument): ShiftRow | null {
   // 終了が開始以前の記録は使わない（誤タップ等）。
   const actualEnd = endCandidate && actualStart && endCandidate <= actualStart ? null : endCandidate;
 
+  // シフトもメイドを確定できなければ reject する（maids_current に nickname:* を作らない）。
+  const resolvedMaidId = maidId(document, maidIdsByNickname);
+  if (!resolvedMaidId) return null;
   return {
     id: document.id,
-    maidId: String(document.data.maidId || `nickname:${String(document.data.maidNickname || "unknown")}`),
+    maidId: resolvedMaidId,
     maidName: String(document.data.maidNickname || "名称未設定"),
     scheduledStart,
     scheduledEnd,
@@ -209,14 +226,41 @@ export function mapUserPayment(document: SourceDocument, secret: string): Paymen
   };
 }
 
+/**
+ * ニックネーム→正規maidId の解決表を、メイド名簿(maidWorkReport)から作る。
+ *
+ * 旧実装 buildMaidMap() は「その同期窓に含まれた workshifts」からしか作れなかったため、
+ * 19時開始のシフトが窓外になる増分同期（既定90分窓）では翌1時の訪問を解決できず、
+ * 同一メイドが正規IDと nickname:* に分裂していた。名簿は小規模なので毎回全件取得してよい。
+ *
+ * 同名が複数ある場合（改名・重複登録）はニックネームだけでは確定できないため、
+ * **意図的に解決しない**。呼び出し側で reject させ、誤ったメイドへ計上されるのを防ぐ。
+ */
+export function buildMaidDirectory(profiles: Array<{ id: string; nickname: string }>) {
+  const byNickname = new Map<string, string | null>(); // null = 曖昧（複数該当）
+  for (const profile of profiles) {
+    const nickname = String(profile.nickname || "").trim();
+    const id = String(profile.id || "").trim();
+    if (!nickname || !id) continue;
+    if (byNickname.has(nickname) && byNickname.get(nickname) !== id) {
+      byNickname.set(nickname, null); // 同名別IDが出た時点で確定不能にする
+    } else {
+      byNickname.set(nickname, id);
+    }
+  }
+  const resolved = new Map<string, string>();
+  for (const [nickname, id] of byNickname) {
+    if (id) resolved.set(nickname, id);
+  }
+  return resolved;
+}
+
+/** 旧名。シフト由来の解決表（フォールバック用途にのみ残す）。 */
 export function buildMaidMap(shifts: SourceDocument[]) {
-  const map = new Map<string, string>();
-  shifts.forEach((document) => {
-    const id = String(document.data.maidId || "").trim();
-    const nickname = String(document.data.maidNickname || "").trim();
-    if (id && nickname) map.set(nickname, id);
-  });
-  return map;
+  return buildMaidDirectory(shifts.map((document) => ({
+    id: String(document.data.maidId || "").trim(),
+    nickname: String(document.data.maidNickname || "").trim(),
+  })));
 }
 
 // ---- maidWorkReport（メイド名簿＋月次実績）: 顧客PIIを含まないため仮名化不要 ----

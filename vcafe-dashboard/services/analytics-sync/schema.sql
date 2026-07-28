@@ -208,13 +208,17 @@ FROM (
 )
 WHERE row_number = 1;
 
--- メイド一覧は名簿(maid_profiles)を正とし、名簿に無いがシフト/ご帰宅に現れるmaidIdも補完する。
+-- メイド一覧は名簿(maid_profiles)を正とする。
+-- 名簿に無い maidId がシフト/ご帰宅に現れた場合も一覧へ補完するが、
+-- 同期側(transform.ts)がニックネームを解決できない行を reject するようになったため、
+-- ここに `nickname:*` の疑似IDが入ることはない。補完対象は
+-- 「名簿から削除されたが過去実績が残っているメイド」に限られ、status で区別できるようにする。
 CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.maids_current` AS
 WITH from_profiles AS (
   SELECT id, nickname AS name, IF(active, "active", "inactive") AS status
   FROM `PROJECT_ID.DATASET_ID.maid_profiles_current`
 ), from_shifts AS (
-  SELECT maidId AS id, ARRAY_AGG(maidName ORDER BY scheduledStart DESC LIMIT 1)[OFFSET(0)] AS name, "active" AS status
+  SELECT maidId AS id, ARRAY_AGG(maidName ORDER BY scheduledStart DESC LIMIT 1)[OFFSET(0)] AS name, "unlisted" AS status
   FROM `PROJECT_ID.DATASET_ID.shifts_raw`
   WHERE maidId NOT IN (SELECT id FROM from_profiles)
   GROUP BY maidId

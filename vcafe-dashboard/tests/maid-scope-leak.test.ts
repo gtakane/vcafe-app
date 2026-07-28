@@ -61,8 +61,10 @@ test("maid レスポンスの顧客IDは元のHMAC IDではない", () => {
 test("admin レスポンスは従来どおり全列を保持する", () => {
   const admin: Viewer = { uid: "a1", name: "運営", role: "admin" };
   const scoped = scopeDataForViewer(data, admin);
-  assert.equal(scoped.customers[0].id, "hmac-abc");
-  assert.equal(scoped.customers[0].gender, "female");
-  assert.equal(scoped.customers[0].paymentAmount ?? null, null); // 元データに無い列は増やさない
-  assert.equal(scoped.customers[0].coin, 2500);
+  // admin 経路は Customer 全列を持つ。union を絞り込んで参照する。
+  const row = scoped.customers[0] as Customer;
+  assert.equal(row.id, "hmac-abc");
+  assert.equal(row.gender, "female");
+  assert.equal(row.paymentAmount ?? null, null); // 元データに無い列は増やさない
+  assert.equal(row.coin, 2500);
 });

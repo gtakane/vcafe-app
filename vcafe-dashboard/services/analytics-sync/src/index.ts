@@ -2,7 +2,7 @@ import { BigQuery } from "@google-cloud/bigquery";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { loadSyncConfig } from "./config.ts";
-import { buildMaidMap, mapCheki, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
+import { buildMaidDirectory, mapCheki, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
 process.on("unhandledRejection", (error) => {
@@ -58,12 +58,15 @@ async function readUsers(ids: string[]) {
 
 // ストリーミング挿入の重複排除キー。id が無い行（月次レポート等）は maidId:month で一意化する。
 // 全行が同一 insertId になると BigQuery が1件を残して残りを重複破棄してしまうため。
-function rowInsertId(row: Record<string, unknown>): string {
-  const identity = row.id ?? (row.maidId != null && row.month != null ? `${row.maidId}:${row.month}` : "row");
-  return `${String(identity)}:${String(row.sourceUpdatedAt || syncedAt)}`;
+function rowInsertId(row: object): string {
+  const r = row as Record<string, unknown>;
+  const identity = r.id ?? (r.maidId != null && r.month != null ? `${r.maidId}:${r.month}` : "row");
+  return `${String(identity)}:${String(r.sourceUpdatedAt || syncedAt)}`;
 }
 
-async function insertRows(tableName: string, rows: Array<Record<string, unknown>>) {
+// インターフェース型は index signature を持たないため Record<string, unknown> では受けられない。
+// 行の形はテーブルごとに異なるので object[] で受ける。
+async function insertRows(tableName: string, rows: object[]) {
   if (!rows.length || config.dryRun) return;
   const rawRows = rows.map((row) => ({ insertId: rowInsertId(row), json: row }));
   try {
@@ -74,6 +77,33 @@ async function insertRows(tableName: string, rows: Array<Record<string, unknown>
     console.error(`INSERT_FAILED table=${tableName} name=${err.name} message=${err.message} reasons=${JSON.stringify(reasons)}`);
     throw error;
   }
+}
+
+
+// メイド名簿(maidWorkReport)は小規模（100件未満）なので、窓ごとに全件取得してよい。
+// 実行内で使い回すためキャッシュする。
+let maidDirectoryCache: Map<string, string> | null = null;
+async function loadMaidDirectory(): Promise<Map<string, string>> {
+  if (maidDirectoryCache) return maidDirectoryCache;
+  const snapshot = await sourceDb.collection("maidWorkReport").select("nickname").limit(5000).get();
+  maidDirectoryCache = buildMaidDirectory(snapshot.docs.map((document) => ({
+    id: document.id,
+    nickname: String(document.get("nickname") ?? "").trim(),
+  })));
+  console.info(JSON.stringify({ maidDirectory: { profiles: snapshot.size, resolvable: maidDirectoryCache.size } }));
+  return maidDirectoryCache;
+}
+
+/**
+ * 変換で落ちた件数を理由つきで数える。生データ・UID・ニックネームは記録しない
+ * （分析側に本番の識別子を残さないため）。
+ */
+function countRejects(readCount: number, acceptedCount: number, source: string, reasonCode: string) {
+  const rejected = readCount - acceptedCount;
+  if (rejected > 0) {
+    console.warn(JSON.stringify({ reject: { source, reasonCode, rejected, read: readCount } }));
+  }
+  return rejected;
 }
 
 // 指定した [start, end) の24時間窓を1回分同期する。
@@ -100,11 +130,13 @@ async function syncWindow(start: Date, end: Date) {
   const userIds = [...new Set([...visitDocuments, ...chekiDocuments, ...userPaymentDocuments].map((document) => document.parentId).filter((id): id is string => Boolean(id)))];
   const userDocuments = await readUsers(userIds);
   const excludedUsers = new Set(userDocuments.filter((document) => !mapUser(document, config.hmacSecret)).map((document) => document.id));
-  const maidMap = buildMaidMap(shiftDocuments);
+  // メイド解決表は名簿(maidWorkReport)から作る。同期窓に含まれるシフトだけでは
+  // 19時開始シフト＋翌1時訪問のようなケースを解決できず、nickname:* へ分裂するため。
+  const maidMap = await loadMaidDirectory();
   const customers = userDocuments.map((document) => mapUser(document, config.hmacSecret)).filter((row): row is NonNullable<typeof row> => Boolean(row));
   const visits = visitDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapVisit(document, config.hmacSecret, maidMap)).filter((row): row is NonNullable<typeof row> => Boolean(row));
   const cheki = chekiDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapCheki(document, config.hmacSecret, maidMap, syncedAt)).filter((row): row is NonNullable<typeof row> => Boolean(row));
-  const shifts = shiftDocuments.map(mapShift).filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const shifts = shiftDocuments.map((document) => mapShift(document, maidMap)).filter((row): row is NonNullable<typeof row> => Boolean(row));
   // 課金ログ: userPayments（全時代の台帳・実払い円）を正とし、
   // 旧2ソース(payments/purchaseLog)も検証用に raw へ残す（集計はビュー側で userPayments に限定）。
   const payments = [
@@ -127,7 +159,19 @@ async function syncWindow(start: Date, end: Date) {
     insertRows("presents_raw", presents.map((row) => ({ ...row, syncedAt }))),
   ]);
 
-  console.info(JSON.stringify({ dryRun: config.dryRun, window: { start: start.toISOString(), end: end.toISOString() }, counts: { customers: customers.length, visits: visits.length, cheki: cheki.length, shifts: shifts.length, payments: payments.length, presents: presents.length } }));
+  const rejects = {
+    visits: countRejects(visitDocuments.length, visits.length, "userRecordVisits", "UNRESOLVED_MAID_OR_INVALID"),
+    cheki: countRejects(chekiDocuments.length, cheki.length, "userAlbum", "UNRESOLVED_MAID_OR_INVALID"),
+    shifts: countRejects(shiftDocuments.length, shifts.length, "workshifts", "UNRESOLVED_MAID_OR_INVALID"),
+    presents: countRejects(presentDocuments.length, presents.length, "userRecordPresents", "UNRESOLVED_MAID_OR_INVALID"),
+  };
+  console.info(JSON.stringify({
+    dryRun: config.dryRun,
+    window: { start: start.toISOString(), end: end.toISOString() },
+    read: { visits: visitDocuments.length, cheki: chekiDocuments.length, shifts: shiftDocuments.length, payments: paymentDocuments.length + purchaseDocuments.length + userPaymentDocuments.length, presents: presentDocuments.length },
+    accepted: { customers: customers.length, visits: visits.length, cheki: cheki.length, shifts: shifts.length, payments: payments.length, presents: presents.length },
+    rejected: rejects,
+  }));
 }
 
 // maidWorkReport（メイド名簿＋月次実績）を全件スナップショット同期する。

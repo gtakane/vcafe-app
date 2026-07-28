@@ -28,22 +28,22 @@ test("maps a paid visit with the known ticket price", () => {
 });
 
 test("derives the visit weight from initialTime (core.py と一致)", () => {
-  const visit = mapVisit({ id: "visit-2", parentId: "user-1", data: { enterDateTime: timestamp("2026-07-21T10:00:00Z"), usedTicketItemId: "gokitaku30minutes", billedCoin: 600, initialTime: 40 } }, secret, new Map());
+  const visit = mapVisit({ id: "visit-2", parentId: "user-1", data: { maidId: "maid-1", enterDateTime: timestamp("2026-07-21T10:00:00Z"), usedTicketItemId: "gokitaku30minutes", billedCoin: 600, initialTime: 40 } }, secret, new Map());
   assert.equal(visit?.weight, 2); // 40分 → 重み2
 });
 
 test("classifies a zero-coin non-trial visit as paid, not free", () => {
   // 旧実装は billedCoin+reward<=0 を free に誤分類していた。core.py は有料扱い。
-  const visit = mapVisit({ id: "visit-3", parentId: "user-1", data: { enterDateTime: timestamp("2026-07-21T10:00:00Z"), usedTicketItemId: "ATCOIN", billedCoin: 0 } }, secret, new Map());
+  const visit = mapVisit({ id: "visit-3", parentId: "user-1", data: { maidId: "maid-1", enterDateTime: timestamp("2026-07-21T10:00:00Z"), usedTicketItemId: "ATCOIN", billedCoin: 0 } }, secret, new Map());
   assert.equal(visit?.type, "paid");
   assert.equal(visit?.revenue, 0); // round(0 * 1.4)
 });
 
 test("classifies reservation and trial visits", () => {
-  const reservation = mapVisit({ id: "visit-4", parentId: "user-1", data: { enterDateTime: timestamp("2026-07-21T10:00:00Z"), roomType: "reservation", usedTicketItemId: "gokitaku30minutes" } }, secret, new Map());
+  const reservation = mapVisit({ id: "visit-4", parentId: "user-1", data: { maidId: "maid-1", enterDateTime: timestamp("2026-07-21T10:00:00Z"), roomType: "reservation", usedTicketItemId: "gokitaku30minutes" } }, secret, new Map());
   assert.equal(reservation?.type, "reservation");
   assert.equal(reservation?.revenue, 3920);
-  const trial = mapVisit({ id: "visit-5", parentId: "user-1", data: { enterDateTime: timestamp("2026-07-21T10:00:00Z"), usedTicketItemId: "trial10minutes" } }, secret, new Map());
+  const trial = mapVisit({ id: "visit-5", parentId: "user-1", data: { maidId: "maid-1", enterDateTime: timestamp("2026-07-21T10:00:00Z"), usedTicketItemId: "trial10minutes" } }, secret, new Map());
   assert.equal(trial?.type, "trial");
   assert.equal(trial?.revenue, 0);
 });
@@ -160,4 +160,20 @@ test("mapShift: 終了が開始以前の記録は採用しない", () => {
     serveEndTime: [timestamp("2026-07-21T12:00:00Z")],
   } })!;
   assert.equal(shift.actualEnd, null);
+});
+
+test("mapVisit: メイドを特定できない行は reject する（旧実装の nickname:unknown を廃止）", () => {
+  // 旧実装は maidId も maidNickname も無い行に `nickname:unknown` を付けて集計へ混ぜていた。
+  // 実在しないメイドの実績が積み上がるため、集計対象から外す。
+  const visit = mapVisit({ id: "v", parentId: "u", data: {
+    enterDateTime: timestamp("2026-07-21T10:00:00Z"), usedTicketItemId: "ATCOIN",
+  } }, secret, new Map());
+  assert.equal(visit, null);
+});
+
+test("mapShift: メイドを特定できないシフトは reject する", () => {
+  const shift = mapShift({ id: "s", data: {
+    openTime: timestamp("2026-07-21T12:00:00Z"), closeTime: timestamp("2026-07-21T17:00:00Z"),
+  } }, new Map());
+  assert.equal(shift, null);
 });
