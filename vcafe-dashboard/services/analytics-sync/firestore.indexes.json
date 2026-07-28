@@ -1,6 +1,7 @@
 {
   "__comment__": "本番プロジェクト(v-athome-cafe-app)の COLLECTION_GROUP スコープ単一フィールドインデックス例外の記録（2026-07時点のコンソール実機と一致）。分析同期(index.ts)は userRecordVisits/enterDateTime, userAlbum/date, workshifts/openTime, userRecordPresents/presentDateTime に対して collectionGroup の範囲クエリを実行するため、これらは COLLECTION_GROUP ASCENDING が必要（無いと FAILED_PRECONDITION）。assetMaids/roomAdmissions/userVisitMaids/workShiftGroups は本番アプリ側が使用しているもので、分析では不要だが実態を記録している。",
-  "__warning__": "このファイルを firebase deploy --only firestore:indexes で適用しないこと。deploy はファイルの内容に本番を合わせるため、ここに書かれていない例外が削除され本番障害につながる。追加は Firebase コンソールの Firestore > インデックス > 除外 > 「除外を追加」（追加のみ）か、node check-presents-index.mjs が表示するURLから行うこと。",
+  "__warning__": "このファイルを firebase deploy --only firestore:indexes で適用しないこと。deploy はファイルの内容に本番を合わせるため、ここに書かれていないものが削除され本番障害につながる。特に本番には複合インデックスが12件(purchaseLog, reservations, userItems, users, workshifts 等)存在するが、下の indexes は空配列であり、deploy するとそれらが全削除される。追加は Firebase コンソールの Firestore > インデックス > 「自動」タブ > 除外 > 「除外を追加」（追加のみ・単一フィールド例外）で行うこと。複合インデックスは「手動」タブ側で別管理であり、分析同期では不要。",
+  "__indexes_note__": "空配列は「本番に複合インデックスが無い」という意味ではなく、分析同期が複合インデックスを必要としないという意味。実際の本番の複合インデックスはコンソールの「手動」タブを参照。",
   "indexes": [],
   "fieldOverrides": [
     {
