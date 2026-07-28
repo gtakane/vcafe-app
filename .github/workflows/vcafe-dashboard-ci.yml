@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - "agent/nextjs-firebase-dashboard"
+      - "claude/nextjs-firebase-dashboard-review-w74yfo"
     paths:
       - "vcafe-dashboard/**"
       - ".github/workflows/vcafe-dashboard-ci.yml"
@@ -50,6 +51,16 @@ jobs:
       - name: Install dashboard dependencies
         run: npm ci
 
+      - name: Set up Python for the shared metrics contract
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # tsconfig が services/tests を除外していたため、同期サービスの型エラーが
+      # CI をすり抜けていた。型検査を明示的に実行する。
+      - name: Typecheck (app + analytics sync)
+        run: npm run typecheck
+
       - name: Test dashboard
         run: npm test
 
@@ -58,6 +69,20 @@ jobs:
 
       - name: Test Discord attendance parser
         run: npm test --prefix services/discord-attendance
+
+      # Python(core.py) と TypeScript(lib/metrics.ts) が同じ golden fixture で
+      # 同じ値を返すことを検証する。片方だけ変更すると落ちる。
+      - name: Metrics contract (Python vs TypeScript)
+        run: npm run test:contract
+
+      # schema.sql から manifest を再生成し、コミット済みのものと差分が無いことを確認する。
+      # 実 BigQuery との照合は services/analytics-sync/check-bigquery-schema.sh で行う
+      # （認証情報が必要なため CI では別ジョブ／nightly に分離する）。
+      - name: Schema manifest is up to date
+        run: |
+          npm run schema:manifest
+          git diff --exit-code services/analytics-sync/src/schema-manifest.json \
+            || { echo "::error::schema.sql と manifest がずれています。npm run schema:manifest を実行してコミットしてください"; exit 1; }
 
       - name: Build Next.js dashboard
         run: npm run build
