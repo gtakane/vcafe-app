@@ -3,7 +3,7 @@ import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { loadSyncConfig } from "./config.ts";
 import { fetchAllPages, type PageCursor } from "./paging.ts";
-import { buildMaidDirectory, mapCheki, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
+import { buildMaidDirectory, mapCheki, pseudonymizeCustomerId, recordKeyOf, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
 process.on("unhandledRejection", (error) => {
@@ -17,6 +17,8 @@ const sourceApp = initializeApp({ credential: applicationDefault(), projectId: c
 const sourceDb = getFirestore(sourceApp);
 const bigquery = new BigQuery({ projectId: config.analyticsProjectId });
 const syncedAt = new Date().toISOString();
+// 実行識別子。同一 syncedAt の行が複数実行にまたがったときの順序決定に使う。
+const runId = `${syncedAt}-${Math.random().toString(36).slice(2, 10)}`;
 
 /** 取得結果。上限に到達した場合は limitReached=true（呼び出し側で失敗させる）。 */
 interface ReadResult {
@@ -50,6 +52,8 @@ async function readPaged(
       const documents = snapshot.docs.map((document) => ({
         id: document.id,
         parentId: withParent ? document.ref.parent.parent?.id : undefined,
+        // recordKey の材料。生パスは分析側へ保存せず、HMAC化した結果だけを持つ。
+        path: document.ref.path,
         data: document.data(),
         updatedAt: document.updateTime.toDate().toISOString(),
         __cursor: { dateValue: document.get(dateField), path: document.ref.path },
@@ -81,7 +85,7 @@ async function readUsers(ids: string[]) {
   for (let index = 0; index < ids.length; index += 250) {
     const references = ids.slice(index, index + 250).map((id) => sourceDb.collection("users").doc(id));
     const snapshots = await sourceDb.getAll(...references);
-    snapshots.forEach((document) => { if (document.exists) documents.push({ id: document.id, data: document.data() || {}, updatedAt: document.updateTime?.toDate().toISOString() }); });
+    snapshots.forEach((document) => { if (document.exists) documents.push({ id: document.id, path: document.ref.path, data: document.data() || {}, updatedAt: document.updateTime?.toDate().toISOString() }); });
   }
   return documents;
 }
@@ -90,7 +94,11 @@ async function readUsers(ids: string[]) {
 // 全行が同一 insertId になると BigQuery が1件を残して残りを重複破棄してしまうため。
 function rowInsertId(row: object): string {
   const r = row as Record<string, unknown>;
-  const identity = r.id ?? (r.maidId != null && r.month != null ? `${r.maidId}:${r.month}` : "row");
+  // recordKey（フルパスのHMAC）があればそれを使う。document.id は collection group で
+  // 一意にならず、同名別親のドキュメントが重複排除で消える恐れがある。
+  const identity = r.recordKey
+    ?? r.id
+    ?? (r.maidId != null && r.month != null ? `${r.maidId}:${r.month}` : "row");
   return `${String(identity)}:${String(r.sourceUpdatedAt || syncedAt)}`;
 }
 
@@ -190,7 +198,7 @@ async function syncWindow(start: Date, end: Date): Promise<{ degraded: Array<{ s
   const customers = userDocuments.map((document) => mapUser(document, config.hmacSecret)).filter((row): row is NonNullable<typeof row> => Boolean(row));
   const visits = visitDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapVisit(document, config.hmacSecret, maidMap)).filter((row): row is NonNullable<typeof row> => Boolean(row));
   const cheki = chekiDocuments.filter((document) => !excludedUsers.has(document.parentId || "")).map((document) => mapCheki(document, config.hmacSecret, maidMap, syncedAt)).filter((row): row is NonNullable<typeof row> => Boolean(row));
-  const shifts = shiftDocuments.map((document) => mapShift(document, maidMap)).filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const shifts = shiftDocuments.map((document) => mapShift(document, maidMap, config.hmacSecret)).filter((row): row is NonNullable<typeof row> => Boolean(row));
   // 課金ログ: userPayments（全時代の台帳・実払い円）を正とし、
   // 旧2ソース(payments/purchaseLog)も検証用に raw へ残す（集計はビュー側で userPayments に限定）。
   const payments = [
@@ -205,12 +213,20 @@ async function syncWindow(start: Date, end: Date): Promise<{ degraded: Array<{ s
     .filter((row): row is NonNullable<typeof row> => Boolean(row));
 
   await Promise.all([
-    insertRows("customers_raw", customers.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: null }))),
-    insertRows("visits_raw", visits.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: visitDocuments.find((document) => document.id === row.id)?.updatedAt || null }))),
-    insertRows("cheki_raw", cheki),
-    insertRows("shifts_raw", shifts.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: shiftDocuments.find((document) => document.id === row.id)?.updatedAt || null }))),
-    insertRows("payments_raw", payments.map((row) => ({ ...row, syncedAt }))),
-    insertRows("presents_raw", presents.map((row) => ({ ...row, syncedAt }))),
+    // customers は取得済みの updateTime を捨てずに保持する（旧実装は null 固定だった）。
+    insertRows("customers_raw", customers.map((row) => {
+      const source = userDocuments.find((document) => pseudonymizeCustomerId(document.id, config.hmacSecret) === row.id);
+      return {
+        ...row, syncedAt, runId,
+        recordKey: recordKeyOf(source?.path || `users/${row.id}`, config.hmacSecret),
+        sourceUpdatedAt: source?.updatedAt ?? null,
+      };
+    })),
+    insertRows("visits_raw", visits.map((row) => ({ ...row, syncedAt, runId }))),
+    insertRows("cheki_raw", cheki.map((row) => ({ ...row, runId }))),
+    insertRows("shifts_raw", shifts.map((row) => ({ ...row, syncedAt, runId }))),
+    insertRows("payments_raw", payments.map((row) => ({ ...row, syncedAt, runId }))),
+    insertRows("presents_raw", presents.map((row) => ({ ...row, syncedAt, runId }))),
   ]);
 
   const rejects = {
@@ -242,8 +258,8 @@ async function syncMaidReports() {
     .map((document) => mapMonthlyReport(document.ref.parent.parent!.id, document.id, document.data()));
 
   await Promise.all([
-    insertRows("maid_profiles_raw", profiles.map((row) => ({ ...row, syncedAt }))),
-    insertRows("maid_monthly_raw", monthly.map((row) => ({ ...row, syncedAt }))),
+    insertRows("maid_profiles_raw", profiles.map((row) => ({ ...row, syncedAt, runId }))),
+    insertRows("maid_monthly_raw", monthly.map((row) => ({ ...row, syncedAt, runId }))),
   ]);
   console.info(JSON.stringify({ maidReports: { profiles: profiles.length, monthly: monthly.length } }));
 }
@@ -261,7 +277,11 @@ async function syncAllUsers() {
     const documents = snapshot.docs.map((document): SourceDocument => ({ id: document.id, data: document.data(), updatedAt: document.updateTime.toDate().toISOString() }));
     const rows = documents.map((document) => mapUser(document, config.hmacSecret)).filter((row): row is NonNullable<typeof row> => Boolean(row));
     skipped += documents.length - rows.length; // テストユーザーは除外済み
-    await insertRows("customers_raw", rows.map((row) => ({ ...row, syncedAt, sourceUpdatedAt: null })));
+    await insertRows("customers_raw", rows.map((row, index) => ({
+      ...row, syncedAt, runId,
+      recordKey: recordKeyOf(documents[index]?.path || `users/${row.id}`, config.hmacSecret),
+      sourceUpdatedAt: documents[index]?.updatedAt ?? null,
+    })));
     total += rows.length;
     // 途中でタイムアウトしても、どこまで進んだかログで分かるようにする。
     console.info(`ALL_USERS_PROGRESS synced=${total}`);

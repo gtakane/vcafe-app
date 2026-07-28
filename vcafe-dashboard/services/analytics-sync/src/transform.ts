@@ -6,12 +6,43 @@ import type { Customer, Present, Shift, Visit } from "../../../lib/types.ts";
 export interface SourceDocument {
   id: string;
   parentId?: string;
+  /** Firestore のフルパス（例: users/{uid}/userRecordVisits/{id}）。recordKey の材料。 */
+  path?: string;
   data: Record<string, unknown>;
   updatedAt?: string;
 }
 
+/**
+ * 分析側の重複排除キー。
+ *
+ * collection group の document.id はグローバル一意ではなく、親が違えば重複し得る。
+ * 旧実装は id を一意前提に insertId と ROW_NUMBER(PARTITION BY id) を組んでいたため、
+ * 別ユーザー配下の同名ドキュメントが衝突し片方が消える可能性があった。
+ *
+ * フルパスの HMAC を使うことで親が違えば必ず別キーになる。
+ * 生のパスやユーザーIDは分析側に保存しない（不可逆変換した結果だけを持つ）。
+ */
+export function recordKeyOf(path: string, secret: string): string {
+  return createHmac("sha256", secret).update(path, "utf8").digest("hex");
+}
+
+/** path が無い場合の代替。コレクション名を含めて衝突を避ける。 */
+function keyFor(document: SourceDocument, collection: string, secret: string): string {
+  return recordKeyOf(document.path || `${collection}/${document.id}`, secret);
+}
+
+/** 同期内部の共通列。recordKey は分析側の重複排除キーで、ブラウザへは渡さない。 */
+export interface SyncRowMeta {
+  recordKey: string;
+  sourceUpdatedAt: string | null;
+}
+
+export type VisitRow = Visit & SyncRowMeta;
+export type PresentRow = Present & SyncRowMeta;
+
 export interface ChekiRow {
   id: string;
+  recordKey: string;
   customerId: string;
   maidId: string;
   at: string;
@@ -21,6 +52,8 @@ export interface ChekiRow {
 
 export interface ShiftRow extends Shift {
   maidName: string;
+  recordKey: string;
+  sourceUpdatedAt: string | null;
 }
 
 export function pseudonymizeCustomerId(customerId: string, secret: string) {
@@ -50,7 +83,7 @@ function maidId(document: SourceDocument, maidIdsByNickname: Map<string, string>
   return maidIdsByNickname.get(nickname) ?? null;
 }
 
-export function mapVisit(document: SourceDocument, secret: string, maidIdsByNickname: Map<string, string>): Visit | null {
+export function mapVisit(document: SourceDocument, secret: string, maidIdsByNickname: Map<string, string>): VisitRow | null {
   if (!document.parentId) return null;
   const at = firestoreTimestampToIso(document.data.enterDateTime);
   if (!at) return null;
@@ -67,7 +100,10 @@ export function mapVisit(document: SourceDocument, secret: string, maidIdsByNick
   const resolvedMaidId = maidId(document, maidIdsByNickname);
   if (!resolvedMaidId) return null;
   return {
-    id: document.id, at, maidId: resolvedMaidId,
+    id: document.id,
+    recordKey: keyFor(document, "userRecordVisits", secret),
+    sourceUpdatedAt: document.updatedAt ?? null,
+    at, maidId: resolvedMaidId,
     customerId: pseudonymizeCustomerId(document.parentId, secret),
     type, revenue, cheki: 0, weight,
     // 明細表示用（どのチケットで何分、コイン払いか）。
@@ -76,7 +112,7 @@ export function mapVisit(document: SourceDocument, secret: string, maidIdsByNick
 }
 
 // users/{id}/userRecordPresents/{id} = メイドへのアイテムプレゼント（アイテム使用実績）。
-export function mapPresent(document: SourceDocument, secret: string, maidIdsByNickname: Map<string, string>): Present | null {
+export function mapPresent(document: SourceDocument, secret: string, maidIdsByNickname: Map<string, string>): PresentRow | null {
   if (!document.parentId) return null;
   const at = firestoreTimestampToIso(document.data.presentDateTime);
   if (!at) return null;
@@ -84,6 +120,8 @@ export function mapPresent(document: SourceDocument, secret: string, maidIdsByNi
   if (!resolvedMaidId) return null;
   return {
     id: document.id,
+    recordKey: keyFor(document, "userRecordPresents", secret),
+    sourceUpdatedAt: document.updatedAt ?? null,
     customerId: pseudonymizeCustomerId(document.parentId, secret),
     maidId: resolvedMaidId,
     at,
@@ -100,10 +138,10 @@ export function mapCheki(document: SourceDocument, secret: string, maidIdsByNick
   if (!at) return null;
   const resolvedMaidId = maidId(document, maidIdsByNickname);
   if (!resolvedMaidId) return null;
-  return { id: document.id, customerId: pseudonymizeCustomerId(document.parentId, secret), maidId: resolvedMaidId, at, syncedAt, sourceUpdatedAt: document.updatedAt || null };
+  return { id: document.id, recordKey: keyFor(document, "userAlbum", secret), customerId: pseudonymizeCustomerId(document.parentId, secret), maidId: resolvedMaidId, at, syncedAt, sourceUpdatedAt: document.updatedAt || null };
 }
 
-export function mapShift(document: SourceDocument, maidIdsByNickname: Map<string, string> = new Map()): ShiftRow | null {
+export function mapShift(document: SourceDocument, maidIdsByNickname: Map<string, string> = new Map(), secret = ""): ShiftRow | null {
   const scheduledStart = firestoreTimestampToIso(document.data.openTime);
   const scheduledEnd = firestoreTimestampToIso(document.data.closeTime);
   if (!scheduledStart || !scheduledEnd) return null;
@@ -136,6 +174,8 @@ export function mapShift(document: SourceDocument, maidIdsByNickname: Map<string
   if (!resolvedMaidId) return null;
   return {
     id: document.id,
+    recordKey: keyFor(document, "workshifts", secret),
+    sourceUpdatedAt: document.updatedAt ?? null,
     maidId: resolvedMaidId,
     maidName: String(document.data.maidNickname || "名称未設定"),
     scheduledStart,
@@ -147,6 +187,8 @@ export function mapShift(document: SourceDocument, maidIdsByNickname: Map<string
 
 export interface PaymentRowOut {
   id: string;
+  recordKey: string;
+  sourceUpdatedAt: string | null;
   customerId: string;
   at: string;
   amount: number;
@@ -166,6 +208,8 @@ export function mapPayment(document: SourceDocument, secret: string): PaymentRow
   if (!author || !at) return null;
   return {
     id: document.id,
+    recordKey: keyFor(document, "payments", secret),
+    sourceUpdatedAt: document.updatedAt ?? null,
     customerId: pseudonymizeCustomerId(author, secret),
     at,
     amount: numberValue(document.data.paymentAmount),
@@ -187,6 +231,8 @@ export function mapPurchase(document: SourceDocument, secret: string): PaymentRo
   if (!userId || !at) return null;
   return {
     id: document.id,
+    recordKey: keyFor(document, "purchaseLog", secret),
+    sourceUpdatedAt: document.updatedAt ?? null,
     customerId: pseudonymizeCustomerId(userId, secret),
     at,
     // アプリ内課金は円額を保持していないため、コイン数 × 1.4円 で円換算する（COIN_TO_YEN）。
@@ -213,8 +259,10 @@ export function mapUserPayment(document: SourceDocument, secret: string): Paymen
   if (!at || (amount <= 0 && coin <= 0)) return null;
   const customerId = pseudonymizeCustomerId(document.parentId, secret);
   return {
-    // ドキュメントIDはユーザー配下でしか一意でないため、仮名化IDの先頭を付けて衝突を防ぐ。
-    id: `${document.id}:${customerId.slice(0, 8)}`,
+    // 一意性は recordKey（フルパスのHMAC）で担保するため、id は本来の値のままでよい。
+    id: document.id,
+    recordKey: keyFor(document, "userPayments", secret),
+    sourceUpdatedAt: document.updatedAt ?? null,
     customerId,
     at,
     amount,

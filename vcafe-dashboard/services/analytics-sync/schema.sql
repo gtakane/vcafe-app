@@ -1,3 +1,18 @@
+-- 分析用データセットのスキーマ。PROJECT_ID / DATASET_ID を置換して適用する。
+--
+-- 適用順序が重要:
+--   1) CREATE TABLE  … 実体
+--   2) ALTER TABLE   … 後から追加した列（既存環境にも安全に足せる）
+--   3) CREATE VIEW   … 上記の列に依存するため必ず最後
+-- ビューを列追加より前に定義すると、未作成の列を参照して失敗する。
+--
+-- recordKey への切り替え（重複排除キーの変更）は再バックフィル完了後に
+-- migrations/001-record-key-dedup.sql を適用する。順序は docs/migration-recordkey.md を参照。
+
+-- ==========================================================================
+-- 1) テーブル
+-- ==========================================================================
+
 -- Replace PROJECT_ID and DATASET_ID before applying this file to the analytics project.
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.customers_raw` (
   id STRING NOT NULL,
@@ -9,25 +24,6 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.customers_raw` (
 )
 PARTITION BY DATE(syncedAt)
 CLUSTER BY id;
-
--- users ドキュメント由来の付加情報（既存テーブルにも後から追加できるよう ADD COLUMN IF NOT EXISTS）。
-ALTER TABLE `PROJECT_ID.DATASET_ID.customers_raw`
-  ADD COLUMN IF NOT EXISTS gender STRING,
-  ADD COLUMN IF NOT EXISTS birthYear INT64,
-  ADD COLUMN IF NOT EXISTS active BOOL,
-  ADD COLUMN IF NOT EXISTS lastVisitAt TIMESTAMP,
-  ADD COLUMN IF NOT EXISTS lastPaymentAt TIMESTAMP,
-  ADD COLUMN IF NOT EXISTS lastPurchasedItemAt TIMESTAMP,
-  ADD COLUMN IF NOT EXISTS lastPresentAt TIMESTAMP,
-  ADD COLUMN IF NOT EXISTS purchasedItemCoin FLOAT64,
-  ADD COLUMN IF NOT EXISTS purchasedItemRewardPoint FLOAT64,
-  ADD COLUMN IF NOT EXISTS purchasedItemQuantity FLOAT64,
-  ADD COLUMN IF NOT EXISTS presentAmount FLOAT64,
-  ADD COLUMN IF NOT EXISTS coin FLOAT64,
-  ADD COLUMN IF NOT EXISTS rewardPoint FLOAT64,
-  ADD COLUMN IF NOT EXISTS totalVisitAmount FLOAT64,
-  ADD COLUMN IF NOT EXISTS consecutiveVisitDays FLOAT64,
-  ADD COLUMN IF NOT EXISTS maxConsecutiveVisitDays FLOAT64;
 
 -- 課金ログ: payments(Stripe/Webstore, amount=円) と purchaseLog(アプリ内課金, coin=コイン数) を統合。
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.payments_raw` (
@@ -43,31 +39,6 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.payments_raw` (
 )
 PARTITION BY DATE(`at`)
 CLUSTER BY customerId;
-
--- 取り込み元コレクション（userPayments / payments / purchaseLog）。
--- userPayments が全時代の台帳（WEB版もアプリ版も実払い円額を持つ）で、
--- payments/purchaseLog は同じ課金の別記録のため、両方を集計すると二重計上になる。
-ALTER TABLE `PROJECT_ID.DATASET_ID.payments_raw`
-  ADD COLUMN IF NOT EXISTS source STRING;
-
-CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.payments_current` AS
-WITH latest AS (
-  SELECT * EXCEPT(row_number, syncedAt)
-  FROM (
-    SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY syncedAt DESC) AS row_number
-    FROM `PROJECT_ID.DATASET_ID.payments_raw`
-  )
-  WHERE row_number = 1
-), ledger AS (
-  SELECT * FROM latest WHERE source = 'userPayments'
-)
--- userPayments を正とする。まだ1件も無い間（バックフィル前）は旧ソースで代替し、
--- ダッシュボードが空にならないようにする。
-SELECT * FROM ledger
-UNION ALL
-SELECT * FROM latest
-WHERE (source IS NULL OR source != 'userPayments')
-  AND (SELECT COUNT(*) FROM ledger) = 0;
 
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.visits_raw` (
   id STRING NOT NULL,
@@ -85,13 +56,6 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.visits_raw` (
 PARTITION BY DATE(`at`)
 CLUSTER BY maidId, customerId;
 
--- メイド個別ログ用の明細列（既存テーブルにも後から追加できるよう ADD COLUMN IF NOT EXISTS）。
-ALTER TABLE `PROJECT_ID.DATASET_ID.visits_raw`
-  ADD COLUMN IF NOT EXISTS ticketId STRING,
-  ADD COLUMN IF NOT EXISTS minutes FLOAT64,
-  ADD COLUMN IF NOT EXISTS billedCoin FLOAT64,
-  ADD COLUMN IF NOT EXISTS billedRewardPoint FLOAT64;
-
 -- users/{id}/userRecordPresents = メイドへのアイテムプレゼント（アイテム使用実績）
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.presents_raw` (
   id STRING NOT NULL,
@@ -106,14 +70,6 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.presents_raw` (
 )
 PARTITION BY DATE(`at`)
 CLUSTER BY maidId, customerId;
-
-CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.presents_current` AS
-SELECT * EXCEPT(row_number, syncedAt)
-FROM (
-  SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY syncedAt DESC) AS row_number
-  FROM `PROJECT_ID.DATASET_ID.presents_raw`
-)
-WHERE row_number = 1;
 
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.cheki_raw` (
   id STRING NOT NULL,
@@ -175,6 +131,132 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.maid_monthly_raw` (
   syncedAt TIMESTAMP NOT NULL
 )
 CLUSTER BY maidId, month;
+
+-- ==========================================================================
+-- 2) 追加列
+-- ==========================================================================
+
+-- users ドキュメント由来の付加情報（既存テーブルにも後から追加できるよう ADD COLUMN IF NOT EXISTS）。
+ALTER TABLE `PROJECT_ID.DATASET_ID.customers_raw`
+  ADD COLUMN IF NOT EXISTS gender STRING,
+  ADD COLUMN IF NOT EXISTS birthYear INT64,
+  ADD COLUMN IF NOT EXISTS active BOOL,
+  ADD COLUMN IF NOT EXISTS lastVisitAt TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS lastPaymentAt TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS lastPurchasedItemAt TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS lastPresentAt TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS purchasedItemCoin FLOAT64,
+  ADD COLUMN IF NOT EXISTS purchasedItemRewardPoint FLOAT64,
+  ADD COLUMN IF NOT EXISTS purchasedItemQuantity FLOAT64,
+  ADD COLUMN IF NOT EXISTS presentAmount FLOAT64,
+  ADD COLUMN IF NOT EXISTS coin FLOAT64,
+  ADD COLUMN IF NOT EXISTS rewardPoint FLOAT64,
+  ADD COLUMN IF NOT EXISTS totalVisitAmount FLOAT64,
+  ADD COLUMN IF NOT EXISTS consecutiveVisitDays FLOAT64,
+  ADD COLUMN IF NOT EXISTS maxConsecutiveVisitDays FLOAT64;
+
+-- 取り込み元コレクション（userPayments / payments / purchaseLog）。
+-- userPayments が全時代の台帳（WEB版もアプリ版も実払い円額を持つ）で、
+-- payments/purchaseLog は同じ課金の別記録のため、両方を集計すると二重計上になる。
+ALTER TABLE `PROJECT_ID.DATASET_ID.payments_raw`
+  ADD COLUMN IF NOT EXISTS source STRING;
+
+-- メイド個別ログ用の明細列（既存テーブルにも後から追加できるよう ADD COLUMN IF NOT EXISTS）。
+ALTER TABLE `PROJECT_ID.DATASET_ID.visits_raw`
+  ADD COLUMN IF NOT EXISTS ticketId STRING,
+  ADD COLUMN IF NOT EXISTS minutes FLOAT64,
+  ADD COLUMN IF NOT EXISTS billedCoin FLOAT64,
+  ADD COLUMN IF NOT EXISTS billedRewardPoint FLOAT64;
+
+-- ============================================================================
+-- recordKey: 分析側の重複排除キー（Firestoreフルパスの HMAC）。
+-- collection group の document.id はグローバル一意ではないため、id を PARTITION キーに
+-- していると別ユーザー配下の同名ドキュメントが衝突し片方が消える。
+-- runId: 同一 syncedAt の行が複数実行にまたがったときの順序決定に使う。
+-- 既存テーブルにも後から追加できるよう ADD COLUMN IF NOT EXISTS で定義する。
+-- ============================================================================
+ALTER TABLE `PROJECT_ID.DATASET_ID.visits_raw`
+  ADD COLUMN IF NOT EXISTS recordKey STRING,
+  ADD COLUMN IF NOT EXISTS runId STRING;
+
+ALTER TABLE `PROJECT_ID.DATASET_ID.cheki_raw`
+  ADD COLUMN IF NOT EXISTS recordKey STRING,
+  ADD COLUMN IF NOT EXISTS runId STRING;
+
+ALTER TABLE `PROJECT_ID.DATASET_ID.shifts_raw`
+  ADD COLUMN IF NOT EXISTS recordKey STRING,
+  ADD COLUMN IF NOT EXISTS runId STRING;
+
+ALTER TABLE `PROJECT_ID.DATASET_ID.presents_raw`
+  ADD COLUMN IF NOT EXISTS recordKey STRING,
+  ADD COLUMN IF NOT EXISTS runId STRING,
+  ADD COLUMN IF NOT EXISTS sourceUpdatedAt TIMESTAMP;
+
+ALTER TABLE `PROJECT_ID.DATASET_ID.payments_raw`
+  ADD COLUMN IF NOT EXISTS recordKey STRING,
+  ADD COLUMN IF NOT EXISTS runId STRING,
+  ADD COLUMN IF NOT EXISTS sourceUpdatedAt TIMESTAMP;
+
+ALTER TABLE `PROJECT_ID.DATASET_ID.customers_raw`
+  ADD COLUMN IF NOT EXISTS recordKey STRING,
+  ADD COLUMN IF NOT EXISTS runId STRING;
+
+ALTER TABLE `PROJECT_ID.DATASET_ID.maid_profiles_raw`
+  ADD COLUMN IF NOT EXISTS runId STRING;
+
+ALTER TABLE `PROJECT_ID.DATASET_ID.maid_monthly_raw`
+  ADD COLUMN IF NOT EXISTS runId STRING;
+
+-- ==========================================================================
+-- 3) ビュー
+-- ==========================================================================
+
+-- 課金の「正」は userPayments（全時代の台帳）。
+--
+-- 旧実装は `(SELECT COUNT(*) FROM ledger) = 0` で切り替えていたため、台帳が1件でも入ると
+-- 旧ソース(payments/purchaseLog)が**全期間**から除外された。部分バックフィル中や
+-- インデックス障害で特定月だけ台帳が欠けていても、旧データが丸ごと消えてしまう。
+--
+-- そこで「月ごとのカバレッジ」で判定する。台帳がその月をカバーしていれば台帳を使い、
+-- カバーしていない月だけ旧ソースで補完する。移行が途中でも欠損しない。
+CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.payments_current` AS
+WITH latest AS (
+  SELECT * EXCEPT(row_number, syncedAt)
+  FROM (
+    SELECT *, ROW_NUMBER() OVER (
+      PARTITION BY id
+      ORDER BY COALESCE(sourceUpdatedAt, syncedAt) DESC, syncedAt DESC, runId DESC
+    ) AS row_number
+    FROM `PROJECT_ID.DATASET_ID.payments_raw`
+  )
+  WHERE row_number = 1
+), succeeded AS (
+  -- 失敗・キャンセルした決済は売上に含めない。
+  SELECT * FROM latest
+  WHERE status IS NULL
+     OR (
+          LOWER(status) NOT LIKE '%fail%'
+      AND LOWER(status) NOT LIKE '%cancel%'
+      AND LOWER(status) NOT LIKE '%refund%'
+     )
+), ledger_months AS (
+  -- 台帳が実データを持っている月。
+  SELECT DISTINCT FORMAT_DATE('%Y%m', DATE(`at`, 'Asia/Tokyo')) AS ym
+  FROM succeeded WHERE source = 'userPayments'
+)
+SELECT * FROM succeeded WHERE source = 'userPayments'
+UNION ALL
+SELECT * FROM succeeded
+WHERE COALESCE(source, 'legacy') != 'userPayments'
+  AND FORMAT_DATE('%Y%m', DATE(`at`, 'Asia/Tokyo')) NOT IN (SELECT ym FROM ledger_months);
+
+CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.presents_current` AS
+SELECT * EXCEPT(row_number, syncedAt)
+FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY syncedAt DESC) AS row_number
+  FROM `PROJECT_ID.DATASET_ID.presents_raw`
+)
+WHERE row_number = 1;
 
 CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.maid_profiles_current` AS
 SELECT * EXCEPT(row_number, syncedAt)
