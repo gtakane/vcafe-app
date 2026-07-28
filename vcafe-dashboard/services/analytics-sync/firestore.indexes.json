@@ -1,5 +1,5 @@
 {
-  "__comment__": "本番プロジェクト(v-athome-cafe-app)に必要な collection group スコープの単一フィールドインデックス。分析同期(index.ts)は userRecordVisits/enterDateTime, userAlbum/date, workshifts/openTime に対する collectionGroup の範囲クエリを実行するため、COLLECTION_GROUP スコープのインデックスが必要。これが無いと同期クエリは FAILED_PRECONDITION で失敗する。デプロイ: firebase deploy --only firestore:indexes --project v-athome-cafe-app（本番プロジェクトのオーナー権限が必要。データは変更しない）。",
+  "__comment__": "本番プロジェクト(v-athome-cafe-app)に必要な collection group スコープの単一フィールドインデックスの記録。分析同期(index.ts)は userRecordVisits/enterDateTime, userAlbum/date, workshifts/openTime, userRecordPresents/presentDateTime に対する collectionGroup の範囲クエリを実行するため、COLLECTION_GROUP スコープのインデックスが必要（無いと FAILED_PRECONDITION）。【重要】このファイルを firebase deploy --only firestore:indexes で適用しないこと: ここに書かれていない本番側の既存インデックス/例外を削除する方向に同期されるため危険。追加は node check-presents-index.mjs が表示するコンソールURL（1クリックで作成・追加のみ）か、gcloud firestore indexes fields update を使うこと。",
   "indexes": [],
   "fieldOverrides": [
     {
