@@ -6,6 +6,8 @@ import { fetchAllPages, type PageCursor } from "./paging.ts";
 import { buildSyncWindows } from "./windows.ts";
 import { assertRejectRate, mapSafely, type RejectEntry } from "./safe-map.ts";
 import { validateRows } from "./row-validation.ts";
+import { assertLiveSchema, liveColumnsSql, type LiveColumn } from "./schema-precheck.ts";
+import { looksLikeMissingColumn, summarizeInsertErrors } from "./insert-errors.ts";
 import { buildMaidDirectory, mapCheki, pseudonymizeCustomerId, recordKeyOf, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
@@ -121,11 +123,38 @@ async function insertRows(tableName: string, rows: object[]) {
   try {
     await bigquery.dataset(config.dataset).table(tableName).insert(rawRows, { raw: true, ignoreUnknownValues: false });
   } catch (error) {
-    const err = error as { name?: string; message?: string; errors?: unknown[]; response?: { insertErrors?: unknown[] } };
-    const reasons = (err.errors ?? err.response?.insertErrors ?? []).slice(0, 3);
-    console.error(`INSERT_FAILED table=${tableName} name=${err.name} message=${err.message} reasons=${JSON.stringify(reasons)}`);
+    // 生の errors 配列をそのまま出すとログが切り詰められて原因が読めない。
+    // 件数・理由・列名だけに要約する（行の値は本番データなので出さない）。
+    const summary = summarizeInsertErrors(error);
+    console.error(`INSERT_FAILED table=${tableName} name=${(error as Error).name} ${JSON.stringify(summary)}`);
+    if (looksLikeMissingColumn(summary)) {
+      console.error("INSERT_FAILED_HINT BigQuery に列がありません。bash services/analytics-sync/apply-schema.sh を実行してください（配備手順1）。");
+    }
     throw error;
   }
+}
+
+/**
+ * 起動時のスキーマ事前検査。
+ * 列が足りないまま走ると全テーブルが PartialFailureError で失敗し、本番を無駄に読む。
+ * 窓を1つも処理しないうちに、不足列と対処法を添えて停止する。
+ */
+async function precheckSchema() {
+  let rows: LiveColumn[];
+  try {
+    const [result] = await bigquery.query({
+      query: liveColumnsSql(config.analyticsProjectId, config.dataset),
+      location: process.env.BIGQUERY_LOCATION || "asia-northeast1",
+    });
+    rows = (result as Array<{ table: string; column: string }>).map((row) => ({ table: row.table, column: row.column }));
+  } catch (error) {
+    throw new Error(
+      `SCHEMA_PRECHECK_FAILED BigQuery のスキーマを確認できませんでした（${config.analyticsProjectId}.${config.dataset}）: ${(error as Error).message}\n` +
+      "対処: データセットが存在しない場合は bash services/analytics-sync/apply-schema.sh を実行してください（配備手順1）。",
+    );
+  }
+  assertLiveSchema(rows);
+  console.info(JSON.stringify({ schemaPrecheck: { dataset: config.dataset, columns: rows.length, status: "ok" } }));
 }
 
 
@@ -422,6 +451,11 @@ function shouldSyncMaidReports(): boolean {
   const jstHour = new Date(Date.now() + 9 * 3600000).getUTCHours();
   return Number.isInteger(hour) ? jstHour === hour : true;
 }
+
+// 本番を読み始める前にスキーマを確認する。列不足のまま走ると全テーブルの挿入が失敗し、
+// 本番Firestoreの読み取りだけが無駄に発生する（2026-07-27 の事故）。
+// DRY_RUN でも実行する。予行演習で列不足に気づけないと意味がないため。
+await precheckSchema();
 
 if (shouldSyncMaidReports()) {
   await syncMaidReports();
