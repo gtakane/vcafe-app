@@ -43,7 +43,10 @@ echo "# project=${PROJECT_ID} dataset=${DS}"
 
 # --location は必須。省略すると既定ロケーション(US)で探しに行き、
 # asia-northeast1 のデータセットが「見つからない」扱いになる。
-ACTUAL="$(bq --project_id="${PROJECT_ID}" --location="${LOCATION}" query --use_legacy_sql=false --format=csv \
+# --max_rows も必須。既定は100行までで、テーブル数×列数がそれを超えると
+# 後半のテーブルが黙って欠落し、実在するテーブルを「存在しない」と誤報告する
+# （2026-07-29 に実際に発生。schema.sql は適用済みだった）。
+ACTUAL="$(bq --project_id="${PROJECT_ID}" --location="${LOCATION}" query --use_legacy_sql=false --format=csv --max_rows=100000 \
   "SELECT table_name, column_name FROM \`${PROJECT_ID}.${DS}.INFORMATION_SCHEMA.COLUMNS\` ORDER BY table_name, column_name" 2>/dev/null | tail -n +2)"
 
 if [[ -z "${ACTUAL}" ]]; then

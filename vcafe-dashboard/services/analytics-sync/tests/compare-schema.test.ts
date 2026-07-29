@@ -88,6 +88,20 @@ test("bq のエラー文言を列情報として飲み込まない", () => {
   assert.match(out, /想定外の行を受け取りました/);
 });
 
+test("check-bigquery-schema.sh は bq query に --location と --max_rows を指定している", () => {
+  // 2026-07-29 の再発防止。
+  // --location を省略すると既定ロケーション(US)で探しに行き、asia-northeast1 の
+  // データセットが「見つからない」扱いになる。
+  // --max_rows を省略すると既定の100行までしか取れず、テーブル数×列数がそれを
+  // 超えると後半のテーブルが黙って欠落し、実在するテーブルを
+  // 「BigQuery に存在しない」と誤報告する（schema.sql は適用済みだった）。
+  const source = readFileSync(join(SYNC_DIR, "check-bigquery-schema.sh"), "utf8");
+  const line = source.split("\n").find((l) => l.trimStart().startsWith('ACTUAL="$(bq'));
+  assert.ok(line, "INFORMATION_SCHEMA.COLUMNS を取得する bq query 行が見つからない");
+  assert.match(line!, /--location="\$\{LOCATION\}"/, "--location が指定されていない");
+  assert.match(line!, /--max_rows=\d{4,}/, "--max_rows が指定されていない（既定100行では大規模スキーマで欠落する）");
+});
+
 test("シェルスクリプトが `python3 -` とヒアドキュメントでデータを渡していない", () => {
   // 同じ誤用の再発防止。`python3 -` はプログラムを標準入力から読むため、
   // ヒアドキュメントと同時にパイプでデータを渡すと、データは必ず失われる。
