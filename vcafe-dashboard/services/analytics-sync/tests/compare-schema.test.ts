@@ -102,6 +102,28 @@ test("check-bigquery-schema.sh は bq query に --location と --max_rows を指
   assert.match(line!, /--max_rows=\d{4,}/, "--max_rows が指定されていない（既定100行では大規模スキーマで欠落する）");
 });
 
+test("シェルスクリプトが閾値判定に `bc` を使っていない", () => {
+  // 2026-07-29 の再発防止。
+  // `bc` が入っていない環境（実際に発生）では `$(... | bc -l)` が空文字を返し、
+  // `(( "" ))` は構文エラーで常に偽になる。つまり閾値超過があっても常に「pass」に
+  // 落ち、しかもエラーはstderrに流れるだけで status には出ない。
+  // analytics-audit.sh はこの誤判定のまま dq_results に10件記録していた
+  // （orphan_maid_ids=31, revenue_outliers=46 がいずれも閾値0超過なのに pass 扱い）。
+  // awk はどこにでもあるので、閾値比較には awk を使う。
+  const scripts = readdirSync(SYNC_DIR).filter((name) => name.endsWith(".sh"));
+  assert.ok(scripts.length > 0, "検査対象のシェルスクリプトが見つからない");
+  for (const name of scripts) {
+    const source = readFileSync(join(SYNC_DIR, name), "utf8");
+    const codeLines = source.split("\n").filter((l) => !l.trimStart().startsWith("#"));
+    for (const line of codeLines) {
+      assert.ok(
+        !/\bbc\s+-l\b|\|\s*bc\b/.test(line),
+        `${name}: bc に依存した比較がある。bc が無い環境では常に「pass」に落ちる:\n  ${line.trim()}`,
+      );
+    }
+  }
+});
+
 test("シェルスクリプトが `python3 -` とヒアドキュメントでデータを渡していない", () => {
   // 同じ誤用の再発防止。`python3 -` はプログラムを標準入力から読むため、
   // ヒアドキュメントと同時にパイプでデータを渡すと、データは必ず失われる。

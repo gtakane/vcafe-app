@@ -25,9 +25,18 @@ check() {
   value="$(bq --project_id="${PROJECT_ID}" query --use_legacy_sql=false --format=csv "${sql}" 2>/dev/null | tail -1)"
   [[ -z "${value}" || "${value}" == "NULL" ]] && value=0
 
+  # bc は入っていない環境がある（2026-07-29、この環境で実際に発生）。
+  # `bc` が無いと `$(... | bc -l)` は空文字を返し、`(( "" ))` は構文エラーで
+  # 常に偽になる。つまり閾値超過があっても常に「pass」と誤判定し、
+  # しかもエラーは標準エラーに流れるだけで status には出ない、危険な壊れ方をする。
+  # awk はどこにでもある。awk 側は「閾値を超えたか」を終了コードで返すだけにして、
+  # bash 側で否定を重ねない（符号を間違えて常に pass/fail 側に倒れる事故を防ぐ）。
   local status="pass"
-  if [[ "${op}" == "gt" ]] && (( $(echo "${value} > ${threshold}" | bc -l) )); then status="fail"; fi
-  if [[ "${op}" == "lt" ]] && (( $(echo "${value} < ${threshold}" | bc -l) )); then status="fail"; fi
+  if awk -v v="${value}" -v t="${threshold}" -v op="${op}" \
+    'BEGIN { breached = (op == "gt") ? (v > t) : (v < t); exit breached ? 0 : 1 }'
+  then
+    status="fail"
+  fi
   [[ "${status}" == "fail" ]] && FAILURES=$((FAILURES + 1))
 
   printf '%-32s %-6s 実測=%-12s 閾値=%-10s %s\n' "${name}" "${status}" "${value}" "${threshold}" "${detail}"
