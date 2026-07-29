@@ -9,6 +9,7 @@ import { validateRows } from "./row-validation.ts";
 import { assertLiveSchema, liveColumnsSql, type LiveColumn } from "./schema-precheck.ts";
 import { looksLikeMissingColumn, summarizeInsertErrors } from "./insert-errors.ts";
 import { buildMaidDirectory, mapCheki, pseudonymizeCustomerId, recordKeyOf, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
+import { rowInsertId } from "./row-insert-id.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
 process.on("unhandledRejection", (error) => {
@@ -95,17 +96,6 @@ async function readUsers(ids: string[]) {
   return documents;
 }
 
-// ストリーミング挿入の重複排除キー。id が無い行（月次レポート等）は maidId:month で一意化する。
-// 全行が同一 insertId になると BigQuery が1件を残して残りを重複破棄してしまうため。
-function rowInsertId(row: object): string {
-  const r = row as Record<string, unknown>;
-  // recordKey（フルパスのHMAC）があればそれを使う。document.id は collection group で
-  // 一意にならず、同名別親のドキュメントが重複排除で消える恐れがある。
-  const identity = r.recordKey
-    ?? r.id
-    ?? (r.maidId != null && r.month != null ? `${r.maidId}:${r.month}` : "row");
-  return `${String(identity)}:${String(r.sourceUpdatedAt || syncedAt)}`;
-}
 
 // インターフェース型は index signature を持たないため Record<string, unknown> では受けられない。
 // 行の形はテーブルごとに異なるので object[] で受ける。
@@ -119,7 +109,7 @@ async function insertRows(tableName: string, rows: object[]) {
   });
   if (rejected > 0) console.warn(JSON.stringify({ validation: { table: tableName, rejected, total: rows.length } }));
   if (!valid.length) return;
-  const rawRows = valid.map((row) => ({ insertId: rowInsertId(row), json: row }));
+  const rawRows = valid.map((row) => ({ insertId: rowInsertId(row, syncedAt), json: row }));
   try {
     await bigquery.dataset(config.dataset).table(tableName).insert(rawRows, { raw: true, ignoreUnknownValues: false });
   } catch (error) {
