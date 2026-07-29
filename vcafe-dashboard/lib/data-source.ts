@@ -18,26 +18,28 @@ export async function loadAnalyticsData(query: DataQuery): Promise<AnalyticsData
   if (!projectId || !dataset) throw new Error("BigQueryの環境変数が設定されていません");
   const bigquery = new BigQuery({ projectId });
   const location = process.env.BIGQUERY_LOCATION || "asia-northeast1";
-  const maidWhere = query.maidId ? "AND maidId = @maidId" : "";
-  // 営業日(19:00〜翌02:00)で絞る。JSTから2時間引いた日付が営業日。
-  const businessDate = (column: string) => `DATE(TIMESTAMP_SUB(${column}, INTERVAL 2 HOUR), "Asia/Tokyo")`;
-  const params: Record<string, Date | string> = { startDate: query.start, endDate: query.end };
-  if (query.maidId) params.maidId = query.maidId;
+  const params: Record<string, Date | string | null> = { startDate: query.start, endDate: query.end, maidId: query.maidId ?? null };
   const [rows] = await bigquery.query({
     location,
     params,
+    types: { maidId: "STRING" },
     maximumBytesBilled: process.env.BIGQUERY_MAX_BYTES_BILLED || "1073741824",
+    // visits_current / shifts_current / payments_current は id での重複排除に
+    // PARTITION BY id を使うため、生テーブル（DATE(at) 等でパーティション分割済み）を
+    // 全期間スキャンしないと計算できず、期間を絞っても読み取りバイト数が全く減らなかった
+    // （2026-07-29に実測: 直近1日でも全期間でも同じ約306MB）。
+    // *_current_range（TABLE FUNCTION）は生テーブルを先に期間で絞ってから重複排除するため、
+    // 該当パーティションだけを読む。ロジック自体は schema.sql の *_current と同じで、
+    // 二重管理を避けるため直接コピーはせず、この関数だけがダッシュボードから使われる。
     query: `
       WITH selected_visits AS (
-        SELECT * FROM \`${projectId}.${dataset}.visits_current\`
-        WHERE ${businessDate("`at`")} BETWEEN DATE(@startDate) AND DATE(@endDate) ${maidWhere}
+        SELECT * FROM \`${projectId}.${dataset}.visits_current_range\`(DATE(@startDate), DATE(@endDate), @maidId)
       ), selected_shifts AS (
-        SELECT * FROM \`${projectId}.${dataset}.shifts_current\`
-        WHERE ${businessDate("scheduledStart")} BETWEEN DATE(@startDate) AND DATE(@endDate) ${maidWhere}
+        SELECT * FROM \`${projectId}.${dataset}.shifts_current_range\`(DATE(@startDate), DATE(@endDate), @maidId)
       ), customer_payments AS (
         -- 期間内の課金（Webstore円 + アプリ内課金コイン）をユーザー単位に集計する。
         SELECT customerId, COUNT(*) AS paymentCount, SUM(amount) AS paymentAmount
-        FROM \`${projectId}.${dataset}.payments_current\`
+        FROM \`${projectId}.${dataset}.payments_current_range\`(DATE(@startDate), DATE(@endDate))
         WHERE DATE(\`at\`, "Asia/Tokyo") BETWEEN DATE(@startDate) AND DATE(@endDate)
         GROUP BY customerId
       ), selected_customers AS (

@@ -301,6 +301,48 @@ SELECT * FROM succeeded
 WHERE COALESCE(source, 'legacy') != 'userPayments'
   AND FORMAT_DATE('%Y%m', DATE(`at`, 'Asia/Tokyo')) NOT IN (SELECT ym FROM ledger_months);
 
+-- payments_current を期間で絞ってから重複排除する版（ダッシュボードの期間指定クエリ用）。
+-- payments_current は PARTITION BY id を計算するために payments_raw の全期間をスキャンする
+-- 必要があり、DATE(at)でパーティション分割されたテーブルなのに期間を絞っても
+-- スキャン量が一切減らなかった（2026-07-29に実測: 期間問わず同じバイト数）。
+-- ここでは重複排除の前に payments_raw を日付で絞り込むことで、
+-- 該当期間のパーティションだけを読めばよいようにする。
+-- at（決済日時）は一度書き込まれたら再編集されない前提（同一idの複数版が
+-- 別パーティションに分かれることはない）。この前提が崩れる操作を行う場合は要再検討。
+CREATE OR REPLACE TABLE FUNCTION `PROJECT_ID.DATASET_ID.payments_current_range`(start_date DATE, end_date DATE) AS
+(
+  WITH payments_window AS (
+    SELECT * FROM `PROJECT_ID.DATASET_ID.payments_raw`
+    WHERE DATE(`at`) BETWEEN DATE_SUB(start_date, INTERVAL 1 DAY) AND DATE_ADD(end_date, INTERVAL 1 DAY)
+  ), latest AS (
+    SELECT * EXCEPT(row_number, syncedAt)
+    FROM (
+      SELECT *, ROW_NUMBER() OVER (
+        PARTITION BY id
+        ORDER BY COALESCE(sourceUpdatedAt, syncedAt) DESC, syncedAt DESC, runId DESC
+      ) AS row_number
+      FROM payments_window
+    )
+    WHERE row_number = 1
+  ), succeeded AS (
+    SELECT * FROM latest
+    WHERE status IS NULL
+       OR (
+            LOWER(status) NOT LIKE '%fail%'
+        AND LOWER(status) NOT LIKE '%cancel%'
+        AND LOWER(status) NOT LIKE '%refund%'
+       )
+  ), ledger_months AS (
+    SELECT DISTINCT FORMAT_DATE('%Y%m', DATE(`at`, 'Asia/Tokyo')) AS ym
+    FROM succeeded WHERE source = 'userPayments'
+  )
+  SELECT * FROM succeeded WHERE source = 'userPayments'
+  UNION ALL
+  SELECT * FROM succeeded
+  WHERE COALESCE(source, 'legacy') != 'userPayments'
+    AND FORMAT_DATE('%Y%m', DATE(`at`, 'Asia/Tokyo')) NOT IN (SELECT ym FROM ledger_months)
+);
+
 CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.presents_current` AS
 SELECT * EXCEPT(row_number, syncedAt)
 FROM (
@@ -340,6 +382,25 @@ FROM (
   FROM `PROJECT_ID.DATASET_ID.shifts_raw`
 )
 WHERE row_number = 1;
+
+-- shifts_current を期間で絞ってから重複排除する版（理由は payments_current_range と同じ）。
+CREATE OR REPLACE TABLE FUNCTION `PROJECT_ID.DATASET_ID.shifts_current_range`(start_date DATE, end_date DATE, maid_id STRING) AS
+(
+  WITH shifts_window AS (
+    SELECT * FROM `PROJECT_ID.DATASET_ID.shifts_raw`
+    WHERE DATE(scheduledStart) BETWEEN DATE_SUB(start_date, INTERVAL 1 DAY) AND DATE_ADD(end_date, INTERVAL 1 DAY)
+      AND (maid_id IS NULL OR maidId = maid_id)
+  ), latest AS (
+    SELECT * EXCEPT(row_number, maidName, syncedAt, sourceUpdatedAt)
+    FROM (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY COALESCE(sourceUpdatedAt, syncedAt) DESC, syncedAt DESC) AS row_number
+      FROM shifts_window
+    )
+    WHERE row_number = 1
+  )
+  SELECT * FROM latest
+  WHERE DATE(TIMESTAMP_SUB(scheduledStart, INTERVAL 2 HOUR), "Asia/Tokyo") BETWEEN start_date AND end_date
+);
 
 -- メイド一覧は名簿(maid_profiles)を正とする。
 -- 名簿に無い maidId がシフト/ご帰宅に現れた場合も一覧へ補完するが、
@@ -387,6 +448,46 @@ SELECT v.* EXCEPT(cheki, daily_row), IF(v.daily_row = 1, COALESCE(c.cheki_count,
 FROM numbered_visits v
 LEFT JOIN cheki_daily c
   ON c.customerId = v.customerId AND c.maidId = v.maidId AND c.business_date = DATE(TIMESTAMP_SUB(v.`at`, INTERVAL 2 HOUR), "Asia/Tokyo");
+
+-- visits_current を期間で絞ってから重複排除する版（理由は payments_current_range と同じ）。
+-- ダッシュボードは常にこの期間指定クエリしか投げないため、visits_raw/cheki_raw の
+-- 全期間ではなく該当パーティションだけ読めばよい。
+CREATE OR REPLACE TABLE FUNCTION `PROJECT_ID.DATASET_ID.visits_current_range`(start_date DATE, end_date DATE, maid_id STRING) AS
+(
+  WITH visits_window AS (
+    SELECT * FROM `PROJECT_ID.DATASET_ID.visits_raw`
+    WHERE DATE(`at`) BETWEEN DATE_SUB(start_date, INTERVAL 1 DAY) AND DATE_ADD(end_date, INTERVAL 1 DAY)
+      AND (maid_id IS NULL OR maidId = maid_id)
+  ), latest_visits AS (
+    SELECT * EXCEPT(row_number, syncedAt, sourceUpdatedAt)
+    FROM (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY COALESCE(sourceUpdatedAt, syncedAt) DESC, syncedAt DESC) AS row_number
+      FROM visits_window
+    )
+    WHERE row_number = 1
+  ), cheki_window AS (
+    SELECT * FROM `PROJECT_ID.DATASET_ID.cheki_raw`
+    WHERE DATE(`at`) BETWEEN DATE_SUB(start_date, INTERVAL 1 DAY) AND DATE_ADD(end_date, INTERVAL 1 DAY)
+  ), latest_cheki AS (
+    SELECT * EXCEPT(row_number, syncedAt, sourceUpdatedAt)
+    FROM (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY COALESCE(sourceUpdatedAt, syncedAt) DESC, syncedAt DESC) AS row_number
+      FROM cheki_window
+    )
+    WHERE row_number = 1
+  ), cheki_daily AS (
+    SELECT customerId, maidId, DATE(TIMESTAMP_SUB(`at`, INTERVAL 2 HOUR), "Asia/Tokyo") AS business_date, COUNT(*) AS cheki_count
+    FROM latest_cheki GROUP BY customerId, maidId, business_date
+  ), numbered_visits AS (
+    SELECT v.*, ROW_NUMBER() OVER (PARTITION BY customerId, maidId, DATE(TIMESTAMP_SUB(`at`, INTERVAL 2 HOUR), "Asia/Tokyo") ORDER BY `at`) AS daily_row
+    FROM latest_visits v
+  )
+  SELECT v.* EXCEPT(cheki, daily_row), IF(v.daily_row = 1, COALESCE(c.cheki_count, 0), 0) AS cheki
+  FROM numbered_visits v
+  LEFT JOIN cheki_daily c
+    ON c.customerId = v.customerId AND c.maidId = v.maidId AND c.business_date = DATE(TIMESTAMP_SUB(v.`at`, INTERVAL 2 HOUR), "Asia/Tokyo")
+  WHERE DATE(TIMESTAMP_SUB(v.`at`, INTERVAL 2 HOUR), "Asia/Tokyo") BETWEEN start_date AND end_date
+);
 
 -- 同期の鮮度。UIの「最終同期」表示に使う。
 CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.sync_watermark` AS
