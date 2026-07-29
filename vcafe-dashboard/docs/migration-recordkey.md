@@ -27,6 +27,13 @@
 
 ## 適用順序
 
+> ⚠️ **③の前に必ず `gcloud scheduler jobs pause vcafe-analytics-sync-schedule` で
+> 定期実行を止める。** 2026-07-29、止めずにバックフィルを実行したところ、作業中に
+> 毎時の定期実行が発火し、バックフィル用の環境変数（`BACKFILL_FROM`/`BACKFILL_TO`/
+> 緩めた`REJECT_RATE_THRESHOLD`）のまま実行されてしまい、本来の増分同期の代わりに
+> 同じ期間のバックフィルが重複実行された（詳細は `docs/enable-sync-runbook.md` 手順8）。
+> ③が終わったら忘れず `gcloud scheduler jobs resume ...` で再開する。
+
 ```
 ① コード配備（イメージ再ビルド）
    bash services/analytics-sync/deploy-disabled-job-tokyo.sh

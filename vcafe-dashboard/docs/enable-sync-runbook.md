@@ -105,6 +105,28 @@ Cloud Scheduler がジョブを定期起動する。スケジューラSAには `
 `BACKFILL_FROM`〜`BACKFILL_TO`（UTC・終了日は含まない）で24時間窓を連続実行する。
 1回あたり550窓の上限があるため、5年分は区間に分けて実行する。
 
+> ⚠️ **開始前に必ずCloud Schedulerを止める。**
+> 2026-07-29、バックフィル作業中（複数区間を順に`--wait`実行）に、ちょうど毎時0分の
+> 定期実行がスケジューラから発火した。そのとき環境変数はまだバックフィル設定
+> （`BACKFILL_FROM`/`BACKFILL_TO`/`REJECT_RATE_THRESHOLD`緩和など）のままだったため、
+> **本来は直近90分の増分同期をするはずだった定期実行が、丸ごと同じ範囲のバックフィルとして
+> 実行されてしまった**（手動実行と並行・重複）。`*_raw`は追記のみで`recordKey`により
+> 重複排除されるためデータ破損は無かったが、本番Firestoreへの読み取りが同じ期間で
+> 二重に発生し、その時間帯の本来の増分同期が欠落した（`RESCAN_DAYS`の日次再走査で
+> 後から埋まったため実害は無かったが、偶然である）。
+>
+> ```bash
+> gcloud scheduler jobs pause vcafe-analytics-sync-schedule \
+>   --project=vcafe-admin-analytics --location=asia-northeast1
+> ```
+>
+> バックフィル完了後（下記の変数除去のあと）に必ず再開する:
+>
+> ```bash
+> gcloud scheduler jobs resume vcafe-analytics-sync-schedule \
+>   --project=vcafe-admin-analytics --location=asia-northeast1
+> ```
+
 ```bash
 JOB=vcafe-analytics-sync; R=asia-northeast1; P=vcafe-admin-analytics
 BASE="CONFIRM_READ_ONLY_SYNC=I_UNDERSTAND_THIS_READS_PRODUCTION,DRY_RUN=false,MAX_DOCUMENTS=5000,MAID_REPORTS=never"
