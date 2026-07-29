@@ -462,6 +462,9 @@ if (process.env.SYNC_ALL_USERS === "true") {
 //   BACKFILL_FROM / BACKFILL_TO / BACKFILL_DAYS … 過去の明示的な取り込み
 //   RESCAN_DAYS                                  … 直近N日を毎回読み直し、後から入った
 //                                                  イベントの修正を取り込む（指摘8の短期対策）
+//   RESCAN_DEEP_DAYS / RESCAN_DEEP_HOUR_JST      … RESCAN_DAYSに加えて、1日1回だけ
+//                                                  追加で読み直す日数（売上規模が増えても
+//                                                  毎時N日分を読み直し続けない階層化。2026-07-29）
 const windows = buildSyncWindows({
   start: config.start,
   end: config.end,
@@ -469,6 +472,8 @@ const windows = buildSyncWindows({
   backfillTo: process.env.BACKFILL_TO,
   backfillDays: Number(process.env.BACKFILL_DAYS || 0),
   rescanDays: Number(process.env.RESCAN_DAYS || 0),
+  rescanDeepDays: Number(process.env.RESCAN_DEEP_DAYS || 0),
+  rescanDeepHourJst: Number(process.env.RESCAN_DEEP_HOUR_JST ?? 5),
 });
 
 // 窓ごとに実行。1窓失敗しても残りは続行し、最後にまとめて報告する（大量バックフィルの耐障害性）。

@@ -26,8 +26,17 @@ export interface WindowInput {
   backfillFrom?: string;
   backfillTo?: string;
   backfillDays?: number;
-  /** 直近N日を毎回読み直す。0/未設定なら再走査しない。 */
+  /** 直近N日を毎回（実行のたび）読み直す。0/未設定なら再走査しない。 */
   rescanDays?: number;
+  /**
+   * rescanDays に加えて、1日1回だけ追加で読み直す日数（0/未設定なら無効）。
+   * RESCAN_DAYS を毎時大きくすると「N日×24回/日」の冗長な読み取りが売上規模に
+   * 比例して増え続ける（2026-07-29の議論）。即日の修正はrescanDaysで毎時拾いつつ、
+   * それより古い期間の取りこぼしは1日1回のこちらでまとめて拾う。
+   */
+  rescanDeepDays?: number;
+  /** rescanDeepDays を実行するJST時（既定5時）。rescanDeepDays指定時のみ使う。 */
+  rescanDeepHourJst?: number;
   now?: Date;
 }
 
@@ -67,10 +76,17 @@ export function buildSyncWindows(input: WindowInput): SyncWindow[] {
 
   // 再走査: 増分窓より前の期間を日単位で読み直し、後から入った修正を取り込む。
   const rescanDays = Number(input.rescanDays || 0);
-  if (Number.isInteger(rescanDays) && rescanDays > 0) {
-    if (rescanDays > 31) throw new Error("RESCAN_DAYSは31以内で指定してください");
+  const rescanDeepDays = Number(input.rescanDeepDays || 0);
+  let effectiveRescanDays = rescanDays;
+  if (Number.isInteger(rescanDeepDays) && rescanDeepDays > 0) {
+    const hour = Number(input.rescanDeepHourJst ?? 5);
+    const jstHour = new Date(now.getTime() + 9 * 60 * 60 * 1000).getUTCHours();
+    if (!Number.isInteger(hour) || jstHour === hour) effectiveRescanDays = rescanDays + rescanDeepDays;
+  }
+  if (Number.isInteger(effectiveRescanDays) && effectiveRescanDays > 0) {
+    if (effectiveRescanDays > 31) throw new Error("RESCAN_DAYS+RESCAN_DEEP_DAYSの合計は31以内で指定してください");
     const rescanEnd = input.start.getTime(); // 増分窓と重複させない
-    for (let day = 0; day < rescanDays; day += 1) {
+    for (let day = 0; day < effectiveRescanDays; day += 1) {
       const end = rescanEnd - day * DAY_MS;
       windows.push({ start: new Date(end - DAY_MS), end: new Date(end), kind: "rescan" });
     }

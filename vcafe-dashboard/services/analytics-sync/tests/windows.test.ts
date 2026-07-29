@@ -62,3 +62,31 @@ test("バックフィルの区間と上限は従来どおり", () => {
   assert.throws(() => buildSyncWindows({ ...incremental, backfillFrom: "2020-01-01", now }), /550/);
   assert.throws(() => buildSyncWindows({ ...incremental, backfillFrom: "2027-01-01", now }), /終了日以降/);
 });
+
+// 2026-07-29: RESCAN_DAYS を毎時大きくすると「N日×24回/日」の冗長読み取りが
+// 売上規模に比例して増え続ける。直近だけ毎時読み直しつつ、それより古い期間は
+// 1日1回のRESCAN_DEEP_DAYSでまとめて拾う階層化を固定する。
+const jst5am = new Date("2026-07-28T20:00:00Z"); // JST 2026-07-29 05:00
+const jst9am = new Date("2026-07-29T00:00:00Z"); // JST 2026-07-29 09:00（深い再走査の時刻ではない）
+
+test("RESCAN_DEEP_DAYS指定時、深い再走査の時刻ならRESCAN_DAYSに加算される", () => {
+  const windows = buildSyncWindows({ ...incremental, rescanDays: 1, rescanDeepDays: 2, rescanDeepHourJst: 5, now: jst5am });
+  assert.equal(windows.filter((w) => w.kind === "rescan").length, 3); // 1(shallow) + 2(deep)
+});
+
+test("RESCAN_DEEP_DAYS指定時、深い再走査の時刻でなければRESCAN_DAYSのみ", () => {
+  const windows = buildSyncWindows({ ...incremental, rescanDays: 1, rescanDeepDays: 2, rescanDeepHourJst: 5, now: jst9am });
+  assert.equal(windows.filter((w) => w.kind === "rescan").length, 1); // shallowのみ
+});
+
+test("RESCAN_DEEP_DAYS未指定なら時刻に関わらずRESCAN_DAYSのみ（既存挙動）", () => {
+  const windows = buildSyncWindows({ ...incremental, rescanDays: 1, now: jst5am });
+  assert.equal(windows.filter((w) => w.kind === "rescan").length, 1);
+});
+
+test("RESCAN_DAYS + RESCAN_DEEP_DAYS の合計が上限を超えたら例外", () => {
+  assert.throws(
+    () => buildSyncWindows({ ...incremental, rescanDays: 20, rescanDeepDays: 20, rescanDeepHourJst: 5, now: jst5am }),
+    /RESCAN_DAYS/,
+  );
+});
