@@ -13,3 +13,6 @@ serviceAccountKey*.json
 services/reservation-notify/maid-map.json
 # 誤って作られたgitの一時ファイル
 FETCH_HEAD
+# 各サービスの部品インストール時に作られるロックファイル（コミットしない運用）。
+# 残っていると deploy-revision-tokyo.sh の「未コミットの変更」検査で止まる。
+services/*/package-lock.json
