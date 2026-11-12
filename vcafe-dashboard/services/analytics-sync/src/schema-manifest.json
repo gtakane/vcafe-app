@@ -127,6 +127,14 @@
       "runId": "STRING",
       "syncedAt": "TIMESTAMP"
     },
+    "platform_purchases": {
+      "month": "STRING",
+      "apple": "FLOAT64",
+      "google": "FLOAT64",
+      "stripe": "FLOAT64",
+      "note": "STRING",
+      "enteredAt": "TIMESTAMP"
+    },
     "shifts_raw": {
       "id": "STRING",
       "maidId": "STRING",

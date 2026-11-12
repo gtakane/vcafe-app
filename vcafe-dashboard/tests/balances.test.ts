@@ -49,3 +49,23 @@ test("当月は最新の記録で暫定値を出す", () => {
   assert.equal(result.months[0].status, "provisional");
   assert.equal(result.months[0].revenue?.stripe, 1100 - 440);
 });
+
+test("Appleの会計月は暦月とずれる（2026年10月 = 9/27〜10/31、11月 = 11/1〜11/28）", async () => {
+  const { appleFiscalMonthRange, monthlyFromDaily } = await import("../lib/balances.ts");
+  assert.deepEqual(appleFiscalMonthRange("2026-10"), { start: "2026-09-27", end: "2026-10-31" });
+  assert.deepEqual(appleFiscalMonthRange("2026-11"), { start: "2026-11-01", end: "2026-11-28" });
+  assert.deepEqual(appleFiscalMonthRange("2026-12"), { start: "2026-11-29", end: "2026-12-26" });
+  const daily = [
+    { day: "2026-09-28", apple: 100, google: 10, stripe: 1000, inappUnknown: 0 }, // Appleは10月、Google/Stripeは9月
+    { day: "2026-10-15", apple: 200, google: 20, stripe: 2000, inappUnknown: 0 },
+    { day: "2026-11-29", apple: 400, google: 40, stripe: 4000, inappUnknown: 0 }, // Appleは12月、Google/Stripeは11月
+  ];
+  const [oct, nov] = monthlyFromDaily(daily, ["2026-10", "2026-11"]);
+  assert.deepEqual([oct.apple, oct.google, oct.stripe], [300, 20, 2000]);
+  assert.deepEqual([nov.apple, nov.google, nov.stripe], [0, 40, 4000]);
+});
+
+test("各社の報告値が登録された月は、課金台帳の推定ではなく報告値を購入額に使う", () => {
+  assert.deepEqual(purchaseYen({ month: "2026-11", apple: 999999, google: 999999, stripe: 999999, inappUnknown: 0, reported: { apple: 673183, google: 188615, stripe: 2605010 } }),
+    { apple: 673183, google: 188615, stripe: 2605010, total: 3466808 });
+});

@@ -128,6 +128,17 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.balance_snapshots` (
 )
 PARTITION BY DATE(snapshotAt);
 
+-- 各社の報告による月の購入額（手数料控除後・経理が使う値）。手入力（runbook-2026-11/set-platform-purchases.sh）。
+-- Apple は App Store の会計月、Google・Stripe は暦月。登録が無い月は課金台帳から推定する。
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.platform_purchases` (
+  month STRING NOT NULL,
+  apple FLOAT64,
+  google FLOAT64,
+  stripe FLOAT64,
+  note STRING,
+  enteredAt TIMESTAMP NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.shifts_raw` (
   id STRING NOT NULL,
   maidId STRING NOT NULL,

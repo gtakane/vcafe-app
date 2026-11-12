@@ -12,13 +12,15 @@ echo "# 列を追加します（既にあれば何もしません）"
 bq query --project_id=$P --use_legacy_sql=false --quiet "ALTER TABLE \`$T.customers_raw\` ADD COLUMN IF NOT EXISTS coinApple FLOAT64, ADD COLUMN IF NOT EXISTS coinGoogle FLOAT64"
 bq query --project_id=$P --use_legacy_sql=false --quiet "ALTER TABLE \`$T.payments_raw\` ADD COLUMN IF NOT EXISTS vendor STRING"
 
-echo "# balance_snapshots テーブルを作成します（既にあれば何もしません）"
+echo "# balance_snapshots・platform_purchases テーブルを作成します（既にあれば何もしません）"
 python3 - "${SYNC_DIR}/schema.sql" "$P" <<'PY'
 import re, subprocess, sys
 sql = open(sys.argv[1], encoding="utf-8").read().replace("PROJECT_ID", "vcafe-admin-analytics").replace("DATASET_ID", "vcafe_analytics")
-stmt = next(s for s in sql.split(";") if re.search(r"`vcafe-admin-analytics\.vcafe_analytics\.balance_snapshots`\s*\(", s))
-body = "\n".join(l for l in stmt.strip().splitlines() if not l.strip().startswith("--"))
-subprocess.run(["bq", f"--project_id={sys.argv[2]}", "query", "--use_legacy_sql=false", "--quiet"], input=body, text=True, check=True)
+for name in ["balance_snapshots", "platform_purchases"]:
+    stmt = next(s for s in sql.split(";") if re.search(rf"`vcafe-admin-analytics\.vcafe_analytics\.{name}`\s*\(", s))
+    body = "\n".join(l for l in stmt.strip().splitlines() if not l.strip().startswith("--"))
+    print(f"  - {name}")
+    subprocess.run(["bq", f"--project_id={sys.argv[2]}", "query", "--use_legacy_sql=false", "--quiet"], input=body, text=True, check=True)
 PY
 
 echo "# 経理の書き出し（2026/11/1時点・テストユーザー/運営関係者除く）を基準値として登録します"

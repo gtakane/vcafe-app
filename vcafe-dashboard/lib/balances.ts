@@ -27,7 +27,52 @@ export interface BalanceSnapshot {
 
 export interface PlatformYen { apple: number; google: number; stripe: number; total: number }
 
-export interface MonthlyPurchase { month: string; apple: number; google: number; stripe: number; inappUnknown: number }
+export interface MonthlyPurchase {
+  month: string;
+  apple: number; google: number; stripe: number; inappUnknown: number; // 課金台帳からの推定（Apple/Googleは手数料控除前）
+  reported?: { apple: number; google: number; stripe: number } | null; // 各社の報告値（手数料控除後・経理が使う値）
+}
+
+/** 日別の課金額（課金台帳）。Appleの会計月で集計し直すため日単位で持つ。 */
+export interface DailyPurchase { day: string; apple: number; google: number; stripe: number; inappUnknown: number }
+
+/**
+ * Appleの会計月（App Store の支払・財務報告の月）。暦月とずれる。
+ * 会計年度は9月最終土曜の翌日に始まり、各四半期は 5週・4週・4週。53週の年は9月が5週になる。
+ * 例: 2026年10月 = 2026-09-27〜2026-10-31、11月 = 11-01〜11-28、12月 = 11-29〜12-26。
+ */
+export function appleFiscalMonthRange(month: string): { start: string; end: string } {
+  const [y, m] = month.split("-").map(Number);
+  const fiscalYearStartYear = m >= 10 ? y : y - 1; // 10月始まり
+  const lastSaturdayOfSeptember = (year: number) => {
+    const d = new Date(Date.UTC(year, 8, 30));
+    while (d.getUTCDay() !== 6) d.setUTCDate(d.getUTCDate() - 1);
+    return d;
+  };
+  const start = lastSaturdayOfSeptember(fiscalYearStartYear);
+  start.setUTCDate(start.getUTCDate() + 1);
+  const yearEnd = lastSaturdayOfSeptember(fiscalYearStartYear + 1);
+  const index = (m + 2) % 12; // 10月=0 … 9月=11
+  const weeks = [5, 4, 4, 5, 4, 4, 5, 4, 4, 5, 4, 4];
+  const cursor = new Date(start);
+  for (let i = 0; i < index; i++) cursor.setUTCDate(cursor.getUTCDate() + weeks[i] * 7);
+  const end = new Date(cursor);
+  end.setUTCDate(end.getUTCDate() + weeks[index] * 7 - 1);
+  if (index === 11) end.setTime(yearEnd.getTime()); // 53週の年は9月で吸収
+  const ymd = (d: Date) => d.toISOString().slice(0, 10);
+  return { start: ymd(cursor), end: ymd(end) };
+}
+
+/** 日別の課金額を月の購入額にまとめる。Google・Stripeは暦月（日本時間）、AppleはAppleの会計月。 */
+export function monthlyFromDaily(daily: DailyPurchase[], months: string[]): MonthlyPurchase[] {
+  return months.map((month) => {
+    const apple = appleFiscalMonthRange(month);
+    const inMonth = daily.filter((d) => d.day.slice(0, 7) === month);
+    const inApple = daily.filter((d) => d.day >= apple.start && d.day <= apple.end);
+    const sum = (rows: DailyPurchase[], key: keyof Omit<DailyPurchase, "day">) => rows.reduce((total, d) => total + d[key], 0);
+    return { month, apple: sum(inApple, "apple"), google: sum(inMonth, "google"), stripe: sum(inMonth, "stripe"), inappUnknown: sum(inMonth, "inappUnknown") + sum(inApple, "inappUnknown") };
+  });
+}
 
 export interface ConfirmedMonth {
   month: string; // YYYY-MM
@@ -89,6 +134,11 @@ const minus = (a: PlatformYen, b: PlatformYen): PlatformYen => ({ apple: a.apple
 const plus = (a: PlatformYen, b: PlatformYen): PlatformYen => ({ apple: a.apple + b.apple, google: a.google + b.google, stripe: a.stripe + b.stripe, total: a.total + b.total });
 
 export function purchaseYen(p: MonthlyPurchase): PlatformYen {
+  // 各社の報告値があればそれを使う（経理と同じ値）。無ければ課金台帳から推定する。
+  if (p.reported) {
+    const { apple, google, stripe } = p.reported;
+    return { apple, google, stripe, total: apple + google + stripe };
+  }
   const apple = Math.round(p.apple * (1 - STORE_FEE_RATE));
   const google = Math.round(p.google * (1 - STORE_FEE_RATE));
   const stripe = Math.round(p.stripe);
@@ -120,7 +170,8 @@ export function computeBalances(snapshots: BalanceSnapshot[], purchases: Monthly
     const notes = [
       month === currentMonth ? `暫定（${jstParts(closing.snapshot.snapshotAt).day} の残高で計算）` : "",
       !opening.exact || (month !== currentMonth && !closing.exact) ? "月初当日の記録が無く近い日の記録で代用" : "",
-      p && p.inappUnknown > 0 ? "購入元未取得のアプリ内課金があります" : "",
+      p?.reported ? "購入額は各社の報告値" : "購入額は課金台帳からの推定（各社の報告値を登録すると経理と一致）",
+      !p?.reported && p && p.inappUnknown > 0 ? "購入元未取得のアプリ内課金があります" : "",
     ].filter(Boolean);
     return { ...base, status: month === currentMonth ? "provisional" : "confirmed", note: notes.join("・"), purchase, opening: o, closing: c, revenue, revenueExcludingTax: excludingTax(revenue.total) };
   });
@@ -145,15 +196,18 @@ export async function loadBalances(months: string[]): Promise<BalancesResult> {
   const from = `${months[0]}-01`;
   const t = (name: string) => `\`${projectId}.${dataset}.${name}\``;
   const run = async (query: string) => (await bigquery.query({ location, params: { from }, maximumBytesBilled, query }))[0] as Array<Record<string, unknown>>;
-  const [snapRows, purchaseRows] = await Promise.all([
+  const [snapRows, purchaseRows, reportedRows] = await Promise.all([
     run(`SELECT * FROM ${t("balance_snapshots")} WHERE DATE(snapshotAt) >= DATE_SUB(DATE(@from), INTERVAL 1 DAY) ORDER BY snapshotAt`),
-    run(`SELECT FORMAT_DATE("%Y-%m", DATE(\`at\`, "Asia/Tokyo")) AS month,
+    // Appleの会計月は暦月より前に始まることがあるため、1週間前から日別で取る。
+    run(`SELECT FORMAT_DATE("%Y-%m-%d", DATE(\`at\`, "Asia/Tokyo")) AS day,
            SUM(IF(vendor = "apple", amount, 0)) AS apple,
            SUM(IF(vendor = "google", amount, 0)) AS google,
            SUM(IF(channel = "webstore", amount, 0)) AS stripe,
            SUM(IF(channel = "inapp" AND vendor IS NULL, amount, 0)) AS inappUnknown
-         FROM ${t("payments_current_range")}(DATE(@from), CURRENT_DATE("Asia/Tokyo"))
-         GROUP BY month`),
+         FROM ${t("payments_current_range")}(DATE_SUB(DATE(@from), INTERVAL 7 DAY), CURRENT_DATE("Asia/Tokyo"))
+         GROUP BY day`),
+    // 各社の報告値（手入力。runbook-2026-11/set-platform-purchases.sh）。未作成なら空。
+    run(`SELECT month, apple, google, stripe FROM ${t("platform_purchases")}`).catch(() => []),
   ]);
   const n = (v: unknown) => Number(v) || 0;
   const snapshots: BalanceSnapshot[] = snapRows.map((r) => ({
@@ -161,6 +215,8 @@ export async function loadBalances(months: string[]): Promise<BalancesResult> {
     appleCoin: n(r.appleCoin), googleCoin: n(r.googleCoin), legacyCoin: n(r.legacyCoin), rewardPoint: n(r.rewardPoint),
     ticketGokitaku: n(r.ticketGokitaku), ticketPremium: n(r.ticketPremium), ticketRandom: n(r.ticketRandom), ticketCheki: n(r.ticketCheki), ticketChekiFree: n(r.ticketChekiFree),
   })).filter((s) => s.snapshotAt);
-  const purchases: MonthlyPurchase[] = purchaseRows.map((r) => ({ month: String(r.month), apple: n(r.apple), google: n(r.google), stripe: n(r.stripe), inappUnknown: n(r.inappUnknown) }));
+  const daily: DailyPurchase[] = purchaseRows.map((r) => ({ day: String(r.day), apple: n(r.apple), google: n(r.google), stripe: n(r.stripe), inappUnknown: n(r.inappUnknown) }));
+  const reported = new Map(reportedRows.map((r) => [String(r.month), { apple: n(r.apple), google: n(r.google), stripe: n(r.stripe) }]));
+  const purchases = monthlyFromDaily(daily, months).map((p) => ({ ...p, reported: reported.get(p.month) ?? null }));
   return computeBalances(snapshots, purchases, months, new Date());
 }
