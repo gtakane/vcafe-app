@@ -1,5 +1,6 @@
 import type { Customer } from "./types";
 import { customers as mockCustomers } from "./mock-data.ts";
+import { testUserCondition } from "./test-users.ts";
 
 // ユーザーDBはダッシュボード上部の期間フィルタから独立して「全会員」を扱う。
 // 既定は登録日(registrationDate)の昇順＝古い会員から。
@@ -21,6 +22,7 @@ export interface CustomerQuery {
   sort?: string;
   dir?: "asc" | "desc";
   limit?: number;
+  includeTestUsers?: boolean; // テストユーザーを含めるか（既定は含めない）
 }
 
 export interface CustomerListResult {
@@ -60,6 +62,7 @@ function normalizeLimit(limit?: number) {
 function filterMock(query: CustomerQuery): CustomerListResult {
   const q = (query.q || "").trim().toLowerCase();
   const matched = mockCustomers.filter((customer) => {
+    if (!query.includeTestUsers && customer.isTestUser) return false;
     if (q && !`${customer.name} ${customer.id}`.toLowerCase().includes(q)) return false;
     if (query.rank && customer.rank !== query.rank) return false;
     if (query.gender && customer.gender !== query.gender) return false;
@@ -110,8 +113,8 @@ export async function loadCustomers(query: CustomerQuery): Promise<CustomerListR
   const direction = query.dir === "desc" ? "DESC" : "ASC";
   const limit = normalizeLimit(query.limit);
 
-  const conditions: string[] = [];
-  const params: Record<string, string | number> = {};
+  const conditions: string[] = [testUserCondition("c")];
+  const params: Record<string, string | number | boolean> = { includeTestUsers: Boolean(query.includeTestUsers) };
   if (query.q) { conditions.push("(LOWER(c.name) LIKE @q OR LOWER(c.id) LIKE @q)"); params.q = `%${query.q.trim().toLowerCase()}%`; }
   if (query.rank) { conditions.push("c.rank = @rank"); params.rank = query.rank; }
   if (query.gender) { conditions.push("c.gender = @gender"); params.gender = query.gender; }
@@ -133,7 +136,7 @@ export async function loadCustomers(query: CustomerQuery): Promise<CustomerListR
     query: `
       WITH pay AS (
         SELECT customerId, COUNT(*) AS paymentCount, SUM(amount) AS paymentAmount
-        FROM \`${projectId}.${dataset}.payments_current\` GROUP BY customerId
+        FROM \`${projectId}.${dataset}.payments_current\` WHERE ${testUserCondition()} GROUP BY customerId
       ), joined AS (
         SELECT c.*, COALESCE(p.paymentCount, 0) AS paymentCount, COALESCE(p.paymentAmount, 0) AS paymentAmount
         FROM \`${projectId}.${dataset}.customers_current\` c
@@ -166,18 +169,22 @@ export async function loadCustomers(query: CustomerQuery): Promise<CustomerListR
 /**
  * 全会員を一度に返す（ユーザーデータベース画面用）。絞り込み・並び替えは画面側（lib/customer-query.ts）で行う。
  * 会員数は数千件規模で、1回の取得で全期間の課金集計を伴うため、同じインスタンス内では10分間使い回す。
+ * テストユーザーも含めて読み込んで1つのキャッシュに持ち、含める／含めないは返す直前に絞る（withoutTestUsers）。
  */
 const ALL_CUSTOMERS_TTL_MS = 10 * 60 * 1000;
 const ALL_CUSTOMERS_MAX = 50000;
 let allCustomersCache: { at: number; value: CustomerListResult } | null = null;
 
-export async function loadAllCustomers(options: { refresh?: boolean } = {}): Promise<CustomerListResult & { cachedAt: string }> {
+export async function loadAllCustomers(options: { refresh?: boolean; includeTestUsers?: boolean } = {}): Promise<CustomerListResult & { cachedAt: string }> {
+  const scoped = (value: CustomerListResult, at: number) => {
+    const customers = options.includeTestUsers ? value.customers : value.customers.filter((c) => !c.isTestUser);
+    return { total: customers.length, returned: customers.length, customers, cachedAt: new Date(at).toISOString() };
+  };
   if (process.env.ANALYTICS_BACKEND !== "bigquery") {
-    const result = filterMock({ limit: MAX_LIMIT });
-    return { ...result, cachedAt: new Date().toISOString() };
+    return scoped(filterMock({ limit: MAX_LIMIT, includeTestUsers: true }), Date.now());
   }
   if (!options.refresh && allCustomersCache && Date.now() - allCustomersCache.at < ALL_CUSTOMERS_TTL_MS) {
-    return { ...allCustomersCache.value, cachedAt: new Date(allCustomersCache.at).toISOString() };
+    return scoped(allCustomersCache.value, allCustomersCache.at);
   }
   const projectId = process.env.BIGQUERY_PROJECT_ID;
   const dataset = process.env.BIGQUERY_DATASET;
@@ -188,6 +195,7 @@ export async function loadAllCustomers(options: { refresh?: boolean } = {}): Pro
     location: process.env.BIGQUERY_LOCATION || "asia-northeast1",
     maximumBytesBilled: process.env.BIGQUERY_MAX_BYTES_BILLED || "1073741824",
     query: `
+      -- test-users: filtered-in-code（テストユーザーも読み、返す直前に scoped() で絞る）
       WITH pay AS (
         SELECT customerId, COUNT(*) AS paymentCount, SUM(amount) AS paymentAmount
         FROM \`${projectId}.${dataset}.payments_current\` GROUP BY customerId
@@ -214,5 +222,5 @@ export async function loadAllCustomers(options: { refresh?: boolean } = {}): Pro
   });
   const value = { total: customers.length, returned: customers.length, customers };
   allCustomersCache = { at: Date.now(), value };
-  return { ...value, cachedAt: new Date(allCustomersCache.at).toISOString() };
+  return scoped(value, allCustomersCache.at);
 }

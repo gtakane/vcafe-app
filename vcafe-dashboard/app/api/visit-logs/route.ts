@@ -4,6 +4,7 @@ import { enforceMaidScope } from "@/lib/analytics";
 import { loadAnalyticsData } from "@/lib/data-source";
 import { buildScopedVisitLogs } from "@/lib/maid-visits";
 import { parseAnalyticsRange } from "@/lib/date-range";
+import { includeTestUsersFrom, TEST_USERS_PARAM } from "@/lib/test-users";
 
 // メイド個別／ユーザー個別のご帰宅明細。メイドは自分の分のみ参照できる。
 export async function GET(request: NextRequest) {
@@ -21,8 +22,9 @@ export async function GET(request: NextRequest) {
     // ここで先に scopeDataForViewer を通すと customerId が segment-00N になり、
     // BigQuery が返すHMAC IDと結合できずアイテム使用が常に0件になる。
     // maidId は enforceMaidScope で自分のIDに強制済みのため、他メイドのデータは読まれない。
-    const data = await loadAnalyticsData({ start, end, maidId });
-    const logs = await buildScopedVisitLogs(data, { maidId, customerId, start, end }, viewer);
+    const includeTestUsers = includeTestUsersFrom(params.get(TEST_USERS_PARAM), viewer.role);
+    const data = await loadAnalyticsData({ start, end, maidId, includeTestUsers });
+    const logs = await buildScopedVisitLogs(data, { maidId, customerId, start, end, includeTestUsers }, viewer);
     return NextResponse.json({ logs }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     console.error("ご帰宅明細の取得に失敗しました", error);

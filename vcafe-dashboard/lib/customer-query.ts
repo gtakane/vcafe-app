@@ -45,6 +45,7 @@ export const CUSTOMER_FIELDS: CustomerField[] = [
   { key: "coinGoogle", label: "Googleコイン残高", kind: "number" },
   { key: "coin", label: "旧コイン残高", kind: "number" },
   { key: "rewardPoint", label: "リワードP残高", kind: "number" },
+  { key: "isTestUser", label: "テストユーザー", kind: "boolean" },
 ];
 
 export const fieldOf = (key: string): CustomerField | undefined => CUSTOMER_FIELDS.find((f) => f.key === key);

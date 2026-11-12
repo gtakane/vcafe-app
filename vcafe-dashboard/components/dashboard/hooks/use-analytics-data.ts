@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { AttendanceSubmission, Viewer, ViewerScopedData } from "@/lib/types";
 import type { GrowthMetrics } from "@/lib/growth";
+import { withTestUsers } from "@/components/dashboard/shared/test-user-scope";
 
 /**
  * ダッシュボードのデータ取得をまとめたフック。
@@ -13,7 +14,7 @@ import type { GrowthMetrics } from "@/lib/growth";
  * 現状は AnalyticsData 全件を取得する設計で、データ量に比例して重くなる。
  * 画面別・ページング付きAPIへの移行計画は docs/dashboard-api-plan.md を参照。
  */
-export function useAnalyticsData({ initialData, initialStart, initialEnd, viewer, start, end, maidId }: {
+export function useAnalyticsData({ initialData, initialStart, initialEnd, viewer, start, end, maidId, includeTestUsers }: {
   initialData: ViewerScopedData;
   initialStart: string;
   initialEnd: string;
@@ -21,6 +22,7 @@ export function useAnalyticsData({ initialData, initialStart, initialEnd, viewer
   start: string;
   end: string;
   maidId: string;
+  includeTestUsers: boolean;
 }) {
   const [remoteData, setRemoteData] = useState(initialData);
   const [loading, setLoading] = useState(false);
@@ -28,14 +30,15 @@ export function useAnalyticsData({ initialData, initialStart, initialEnd, viewer
 
   useEffect(() => {
     const initialMaidId = viewer.role === "maid" ? viewer.maidId || "" : "";
-    // 初期表示と同じ条件なら SSR 済みのデータをそのまま使う（無駄な再取得を避ける）。
-    if (start === initialStart && end === initialEnd && maidId === initialMaidId) { setRemoteData(initialData); return; }
+    // 初期表示と同じ条件なら SSR 済みのデータをそのまま使う（無駄な再取得を避ける）。SSR はテストユーザーを含めない。
+    if (start === initialStart && end === initialEnd && maidId === initialMaidId && !includeTestUsers) { setRemoteData(initialData); return; }
     const controller = new AbortController();
     // 日付入力の連続変更で毎回叩かないよう 250ms 待つ。
     const timer = window.setTimeout(async () => {
       setLoading(true); setLoadError("");
       try {
         const params = new URLSearchParams({ start, end }); if (maidId) params.set("maidId", maidId);
+        withTestUsers(params, includeTestUsers);
         const response = await fetch(`/api/analytics?${params}`, { signal: controller.signal, cache: "no-store" });
         if (!response.ok) throw new Error((await response.json()).error || "データを取得できませんでした");
         setRemoteData(await response.json());
@@ -43,13 +46,13 @@ export function useAnalyticsData({ initialData, initialStart, initialEnd, viewer
       finally { if (!controller.signal.aborted) setLoading(false); }
     }, 250);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [start, end, maidId, initialStart, initialEnd, initialData, viewer.role, viewer.maidId]);
+  }, [start, end, maidId, includeTestUsers, initialStart, initialEnd, initialData, viewer.role, viewer.maidId]);
 
   return { remoteData, loading, loadError };
 }
 
 /** グロース指標。管理者のみが取得する。 */
-export function useGrowthMetrics({ viewer, start, end }: { viewer: Viewer; start: string; end: string }) {
+export function useGrowthMetrics({ viewer, start, end, includeTestUsers }: { viewer: Viewer; start: string; end: string; includeTestUsers: boolean }) {
   const [growth, setGrowth] = useState<GrowthMetrics | null>(null);
   const [growthLoading, setGrowthLoading] = useState(false);
   const [growthError, setGrowthError] = useState("");
@@ -60,14 +63,14 @@ export function useGrowthMetrics({ viewer, start, end }: { viewer: Viewer; start
     const timer = window.setTimeout(async () => {
       setGrowthLoading(true); setGrowthError("");
       try {
-        const response = await fetch(`/api/growth?${new URLSearchParams({ start, end })}`, { signal: controller.signal, cache: "no-store" });
+        const response = await fetch(`/api/growth?${withTestUsers(new URLSearchParams({ start, end }), includeTestUsers)}`, { signal: controller.signal, cache: "no-store" });
         if (!response.ok) throw new Error((await response.json()).error || "グロース指標を取得できませんでした");
         setGrowth(await response.json());
       } catch (error) { if (!controller.signal.aborted) setGrowthError(error instanceof Error ? error.message : "グロース指標を取得できませんでした"); }
       finally { if (!controller.signal.aborted) setGrowthLoading(false); }
     }, 250);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [start, end, viewer.role]);
+  }, [start, end, includeTestUsers, viewer.role]);
 
   return { growth, growthLoading, growthError };
 }

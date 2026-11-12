@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
 import { loadGrowthData } from "@/lib/growth";
 import { parseAnalyticsRange } from "@/lib/date-range";
+import { includeTestUsersFrom, TEST_USERS_PARAM } from "@/lib/test-users";
 
 export async function GET(request: NextRequest) {
   const viewer = await getViewer();
@@ -12,7 +13,8 @@ export async function GET(request: NextRequest) {
   const end = request.nextUrl.searchParams.get("end") || "";
   if (!parseAnalyticsRange(start, end)) return NextResponse.json({ error: "有効な期間を366日以内で指定してください" }, { status: 400 });
   try {
-    const result = await loadGrowthData({ start, end });
+    const includeTestUsers = includeTestUsersFrom(request.nextUrl.searchParams.get(TEST_USERS_PARAM), viewer.role);
+    const result = await loadGrowthData({ start, end, includeTestUsers });
     return NextResponse.json(result, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     console.error("グロース指標の取得に失敗しました", error);

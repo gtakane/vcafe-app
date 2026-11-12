@@ -1,5 +1,6 @@
 import type { AnalyticsData, MaidVisitLog, PresentLike, Viewer, Visit } from "./types";
 import { businessDateJst, DEFAULT_INITIAL_TIME, FREE_KIND_LABELS, FREE_TICKET_IDS, freeKindOf, TICKET_PRICES } from "./metrics.ts";
+import { testUserCondition } from "./test-users.ts";
 // 実接客時間の算出は metrics.ts（サーバー依存なしの共通ロジック）にある。
 export { mergedStayMinutes } from "./metrics.ts";
 
@@ -97,7 +98,7 @@ export function buildMaidVisitLogs(
     });
 }
 
-export interface MaidVisitQuery { maidId?: string; customerId?: string; start: string; end: string }
+export interface MaidVisitQuery { maidId?: string; customerId?: string; start: string; end: string; includeTestUsers?: boolean }
 
 /** プレゼントを本番(BigQuery)から取得する。未同期・未作成なら空配列。 */
 async function loadPresents(query: MaidVisitQuery): Promise<PresentLike[]> {
@@ -106,7 +107,7 @@ async function loadPresents(query: MaidVisitQuery): Promise<PresentLike[]> {
   if (!projectId || !dataset) return [];
   const { BigQuery } = await import("@google-cloud/bigquery");
   const bigquery = new BigQuery({ projectId });
-  const params: Record<string, string> = { startDate: query.start, endDate: query.end };
+  const params: Record<string, string | boolean> = { startDate: query.start, endDate: query.end, includeTestUsers: Boolean(query.includeTestUsers) };
   if (query.maidId) params.maidId = query.maidId;
   if (query.customerId) params.customerId = query.customerId;
   try {
@@ -118,6 +119,7 @@ async function loadPresents(query: MaidVisitQuery): Promise<PresentLike[]> {
         SELECT customerId, maidId, \`at\`, itemName, quantity
         FROM \`${projectId}.${dataset}.presents_current\`
         WHERE DATE(TIMESTAMP_SUB(\`at\`, INTERVAL 2 HOUR), "Asia/Tokyo") BETWEEN DATE(@startDate) AND DATE(@endDate)
+          AND ${testUserCondition()}
         ${query.maidId ? "AND maidId = @maidId" : ""}
         ${query.customerId ? "AND customerId = @customerId" : ""}
       `,

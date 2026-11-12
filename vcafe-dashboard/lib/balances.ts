@@ -8,6 +8,7 @@
 // 「月末の残高」は翌月1日の朝（営業終了の2:00以降）に記録したものを使う。
 
 import { CHEKI_PRICE, COIN_YEN, excludingTax, REWARD_POINT_YEN, TICKET_PRICES } from "./metrics.ts";
+import { testUserCondition } from "./test-users.ts";
 
 export const STORE_FEE_RATE = 0.15; // Apple/Google の手数料（小規模事業者プログラム）
 
@@ -188,7 +189,11 @@ const tsIso = (value: unknown): string | null => {
   return String(value);
 };
 
-export async function loadBalances(months: string[]): Promise<BalancesResult> {
+/**
+ * includeTestUsers: テストユーザーを含めた残高の記録（includesTestUsers=true の行）で計算する。
+ * 含めた記録は 2026-11-12 から。経理の基準値（11/1）はテストユーザーを除いた値なので、含める側には使わない。
+ */
+export async function loadBalances(months: string[], includeTestUsers = false): Promise<BalancesResult> {
   const projectId = process.env.BIGQUERY_PROJECT_ID;
   const dataset = process.env.BIGQUERY_DATASET;
   if (!projectId || !dataset) throw new Error("BigQueryの環境変数が設定されていません");
@@ -198,9 +203,10 @@ export async function loadBalances(months: string[]): Promise<BalancesResult> {
   const maximumBytesBilled = process.env.BIGQUERY_MAX_BYTES_BILLED || "1073741824";
   const from = `${months[0]}-01`;
   const t = (name: string) => `\`${projectId}.${dataset}.${name}\``;
-  const run = async (query: string) => (await bigquery.query({ location, params: { from }, maximumBytesBilled, query }))[0] as Array<Record<string, unknown>>;
+  const run = async (query: string) => (await bigquery.query({ location, params: { from, includeTestUsers }, maximumBytesBilled, query }))[0] as Array<Record<string, unknown>>;
   const [snapRows, purchaseRows, reportedRows] = await Promise.all([
-    run(`SELECT * FROM ${t("balance_snapshots")} WHERE DATE(snapshotAt) >= DATE_SUB(DATE(@from), INTERVAL 1 DAY) ORDER BY snapshotAt`),
+    run(`SELECT * FROM ${t("balance_snapshots")} WHERE DATE(snapshotAt) >= DATE_SUB(DATE(@from), INTERVAL 1 DAY)
+         AND COALESCE(includesTestUsers, FALSE) = @includeTestUsers ORDER BY snapshotAt`),
     // Appleの会計月は暦月より前に始まることがあるため、1週間前から日別で取る。
     run(`SELECT FORMAT_DATE("%Y-%m-%d", DATE(\`at\`, "Asia/Tokyo")) AS day,
            SUM(IF(vendor = "apple", amount, 0)) AS apple,
@@ -208,6 +214,7 @@ export async function loadBalances(months: string[]): Promise<BalancesResult> {
            SUM(IF(channel = "webstore", amount, 0)) AS stripe,
            SUM(IF(channel = "inapp" AND vendor IS NULL, amount, 0)) AS inappUnknown
          FROM ${t("payments_current_range")}(DATE_SUB(DATE(@from), INTERVAL 7 DAY), CURRENT_DATE("Asia/Tokyo"))
+         WHERE ${testUserCondition()}
          GROUP BY day`),
     // 各社の報告値（手入力。runbook-2026-11/set-platform-purchases.sh）。未作成なら空。
     run(`SELECT month, apple, google, stripe FROM ${t("platform_purchases")}`).catch(() => []),

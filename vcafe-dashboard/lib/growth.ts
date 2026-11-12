@@ -7,6 +7,7 @@ import { loadBalances, type BalancesResult } from "./balances.ts";
 // 座席モデルの定数は lib/metrics.ts（共通ロジックの正典）へ移動。
 // 既存の参照を壊さないよう再エクスポートしつつ、本ファイル内でも使う。
 import { CAPACITY_PER_MAID_HOUR } from "./metrics.ts";
+import { testUserCondition } from "./test-users.ts";
 export { SEATS_PER_MAID, SLOTS_PER_HOUR, CAPACITY_PER_MAID_HOUR } from "./metrics.ts";
 
 // グロース指標（DAU・新規登録・新規課金転換率・離脱率・占有率/空席率）の算出。
@@ -230,8 +231,9 @@ function computeGrowthFromMock(start: string, end: string): GrowthMetrics {
   return growth;
 }
 
-export async function loadGrowthData(query: { start: string; end: string }): Promise<GrowthMetrics> {
+export async function loadGrowthData(query: { start: string; end: string; includeTestUsers?: boolean }): Promise<GrowthMetrics> {
   const { start, end } = query;
+  const includeTestUsers = Boolean(query.includeTestUsers);
   if (process.env.ANALYTICS_BACKEND !== "bigquery") return computeGrowthFromMock(start, end);
 
   const projectId = process.env.BIGQUERY_PROJECT_ID;
@@ -244,17 +246,17 @@ export async function loadGrowthData(query: { start: string; end: string }): Pro
   const location = process.env.BIGQUERY_LOCATION || "asia-northeast1";
   const maximumBytesBilled = process.env.BIGQUERY_MAX_BYTES_BILLED || "1073741824";
   const businessDate = (column: string) => `DATE(TIMESTAMP_SUB(${column}, INTERVAL 2 HOUR), "Asia/Tokyo")`;
-  const params: Record<string, string> = { start, end, prevStart };
+  const params: Record<string, string | boolean> = { start, end, prevStart, includeTestUsers };
 
   const [regRows] = await bigquery.query({
     location, params, maximumBytesBilled,
     query: `SELECT id, registeredAt FROM \`${projectId}.${dataset}.customers_current\`
-            WHERE registeredAt IS NOT NULL AND DATE(registeredAt, "Asia/Tokyo") BETWEEN DATE(@start) AND DATE(@end)`,
+            WHERE registeredAt IS NOT NULL AND DATE(registeredAt, "Asia/Tokyo") BETWEEN DATE(@start) AND DATE(@end) AND ${testUserCondition()}`,
   });
   const [visitRows] = await bigquery.query({
     location, params, maximumBytesBilled,
     query: `SELECT customerId, maidId, \`at\`, type, weight FROM \`${projectId}.${dataset}.visits_current\`
-            WHERE ${businessDate("`at`")} BETWEEN DATE(@prevStart) AND DATE(@end)`,
+            WHERE ${businessDate("`at`")} BETWEEN DATE(@prevStart) AND DATE(@end) AND ${testUserCondition()}`,
   });
   const [shiftRows] = await bigquery.query({
     location, params, maximumBytesBilled,
@@ -267,14 +269,14 @@ export async function loadGrowthData(query: { start: string; end: string }): Pro
   const shifts: GrowthShiftRow[] = shiftRows.map((r) => ({ maidId: String(r.maidId), scheduledStart: tsIso(r.scheduledStart) ?? "", scheduledEnd: tsIso(r.scheduledEnd) ?? "", actualStart: tsIso(r.actualStart), actualEnd: tsIso(r.actualEnd) })).filter((s) => s.scheduledStart && s.scheduledEnd);
   const growth = computeGrowth(start, end, registrations, visits, shifts);
   try {
-    growth.insights = await loadGrowthInsights({ start, end });
+    growth.insights = await loadGrowthInsights({ start, end }, includeTestUsers);
   } catch (error) {
     console.error("施策・課金の指標の取得に失敗しました", error);
     growth.insights = null;
     growth.insightsError = "施策・課金の指標を取得できませんでした";
   }
   try {
-    growth.balances = await loadBalances(monthsBack(end.slice(0, 7), COHORT_MONTHS));
+    growth.balances = await loadBalances(monthsBack(end.slice(0, 7), COHORT_MONTHS), includeTestUsers);
   } catch (error) {
     console.error("未使用残高の取得に失敗しました", error);
     growth.balances = null;

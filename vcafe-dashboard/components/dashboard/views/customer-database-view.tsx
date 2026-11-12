@@ -8,6 +8,7 @@ import {
 } from "@/lib/customer-query";
 import { genderLabel, jstDate, number, yen } from "../shared/format";
 import VisitLogPanel from "../visit-log/panel";
+import { useIncludeTestUsers, withTestUsers } from "@/components/dashboard/shared/test-user-scope";
 
 // ユーザーデータベース（全会員の通算値。上部の期間フィルタには依存しない）。
 // 全会員を一度だけ読み込み、絞り込み・並び替えは画面側で即時に行う（lib/customer-query.ts）。
@@ -55,6 +56,7 @@ export default function CustomerDatabase({ onExport }: { onExport: (name: string
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(600);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const includeTestUsers = useIncludeTestUsers();
 
   useEffect(() => { setColumns(loadColumns()); }, []);
   useEffect(() => { try { window.localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(columns)); } catch { /* 無視 */ } }, [columns]);
@@ -62,7 +64,9 @@ export default function CustomerDatabase({ onExport }: { onExport: (name: string
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true); setError("");
-    fetch(`/api/customers?all=1${reloadKey ? "&refresh=1" : ""}`, { signal: controller.signal, cache: "no-store" })
+    const params = withTestUsers(new URLSearchParams({ all: "1" }), includeTestUsers);
+    if (reloadKey) params.set("refresh", "1");
+    fetch(`/api/customers?${params}`, { signal: controller.signal, cache: "no-store" })
       .then(async (response) => {
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || "ユーザー一覧を取得できませんでした");
@@ -72,7 +76,7 @@ export default function CustomerDatabase({ onExport }: { onExport: (name: string
       .catch((e) => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "ユーザー一覧を取得できませんでした"); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [reloadKey]);
+  }, [reloadKey, includeTestUsers]);
 
   // 選択肢は全会員から作る（絞り込みで選択肢が消えないようにする）。
   const options = useMemo(() => ({

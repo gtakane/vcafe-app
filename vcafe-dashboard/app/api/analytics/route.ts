@@ -3,6 +3,7 @@ import { getViewer } from "@/lib/auth";
 import { enforceMaidScope, scopeDataForViewer } from "@/lib/analytics";
 import { loadAnalyticsData } from "@/lib/data-source";
 import { parseAnalyticsRange } from "@/lib/date-range";
+import { includeTestUsersFrom, TEST_USERS_PARAM } from "@/lib/test-users";
 
 export async function GET(request: NextRequest) {
   const viewer = await getViewer();
@@ -12,6 +13,7 @@ export async function GET(request: NextRequest) {
   if (!parseAnalyticsRange(start, end)) return NextResponse.json({ error: "有効な期間を366日以内で指定してください" }, { status: 400 });
   const requestedMaidId = request.nextUrl.searchParams.get("maidId") || undefined;
   const maidId = enforceMaidScope(viewer, requestedMaidId);
-  const data = scopeDataForViewer(await loadAnalyticsData({ start, end, maidId }), viewer);
+  const includeTestUsers = includeTestUsersFrom(request.nextUrl.searchParams.get(TEST_USERS_PARAM), viewer.role);
+  const data = scopeDataForViewer(await loadAnalyticsData({ start, end, maidId, includeTestUsers }), viewer);
   return NextResponse.json(data, { headers: { "Cache-Control": "private, no-store" } });
 }

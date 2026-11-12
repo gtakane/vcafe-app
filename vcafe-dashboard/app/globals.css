@@ -225,3 +225,11 @@ tbody tr:hover{background:#fdf7fc}
 .column-picker summary::-webkit-details-marker{display:none}
 .column-picker-list{position:absolute;right:0;top:calc(100% + 6px);z-index:20;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;gap:6px;min-width:220px;max-height:60vh;overflow:auto;box-shadow:0 12px 32px rgba(40,20,60,.12)}
 .column-picker-list label{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--ink)}
+
+/* テストユーザーの切り替え（管理者のみ・全画面に効く） */
+.test-user-switch{display:flex;align-items:center;gap:3px;background:#f6eef6;border-radius:10px;padding:3px 3px 3px 10px;margin-left:auto}
+.test-user-switch span{color:var(--muted);font-size:11px;font-weight:700;margin-right:5px}
+.test-user-switch button{border:0;background:transparent;padding:6px 11px;color:var(--muted);border-radius:8px;font-size:11px;cursor:pointer;font-weight:700}
+.test-user-switch button.selected{background:#fff;color:var(--pink-dark);box-shadow:0 2px 8px rgba(120,60,110,.12)}
+.test-user-note{color:var(--pink-dark);font-weight:700}
+@media (max-width:720px){.topbar{flex-wrap:wrap}.test-user-switch{margin-left:0}}

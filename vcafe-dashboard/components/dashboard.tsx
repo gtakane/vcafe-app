@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { buildTrend, crossVisitCounts, customerRows, filterData, summarize } from "@/lib/analytics";
 import type { Customer, Granularity, Maid, MaidMonthlyReport, MaidReportsResult, MaidVisitLog, Shift, SyncFreshness, Viewer, ViewerScopedData } from "@/lib/types";
 import type { GrowthMetrics } from "@/lib/growth";
@@ -19,6 +19,10 @@ import CrossMatrix from "@/components/dashboard/views/relations-view";
 import GrowthPanel from "@/components/dashboard/views/growth-view";
 import OverviewView from "@/components/dashboard/views/overview-view";
 import { useAnalyticsData, useAttendanceSubmissions, useGrowthMetrics } from "@/components/dashboard/hooks/use-analytics-data";
+import { TestUserScopeContext } from "@/components/dashboard/shared/test-user-scope";
+
+// 「テストユーザーを含める」の選択は閲覧者のブラウザに覚えておく（再読み込みしても戻らないように）。
+const TEST_USERS_STORAGE_KEY = "vcafe.includeTestUsers";
 
 type View = "overview" | "maids" | "growth" | "users" | "relations" | "attendance";
 
@@ -87,9 +91,19 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
   const [maidId, setMaidId] = useState(viewer.role === "maid" ? viewer.maidId || "" : "");
   const [maidTab, setMaidTab] = useState<"monthly" | "log">("monthly");
   const [logMaidId, setLogMaidId] = useState("");
+  // テストユーザーを含めるか（管理者のみ。既定は含めない）。全画面の数値に効く。
+  const [includeTestUsers, setIncludeTestUsers] = useState(false);
+  useEffect(() => {
+    if (viewer.role !== "admin") return;
+    try { setIncludeTestUsers(window.localStorage.getItem(TEST_USERS_STORAGE_KEY) === "include"); } catch { /* 保存できない環境では既定のまま */ }
+  }, [viewer.role]);
+  const changeTestUsers = (include: boolean) => {
+    setIncludeTestUsers(include);
+    try { window.localStorage.setItem(TEST_USERS_STORAGE_KEY, include ? "include" : "exclude"); } catch { /* 無視 */ }
+  };
   // データ取得は hooks へ委譲する。UI状態と取得処理を同じ useEffect 群に混ぜない。
-  const { remoteData, loading, loadError } = useAnalyticsData({ initialData, initialStart, initialEnd, viewer, start, end, maidId });
-  const { growth, growthLoading, growthError } = useGrowthMetrics({ viewer, start, end });
+  const { remoteData, loading, loadError } = useAnalyticsData({ initialData, initialStart, initialEnd, viewer, start, end, maidId, includeTestUsers });
+  const { growth, growthLoading, growthError } = useGrowthMetrics({ viewer, start, end, includeTestUsers });
   const { submissions, submissionError } = useAttendanceSubmissions(viewer);
   const data = useMemo(() => filterData(remoteData, viewer, { start, end, granularity, maidId: maidId || undefined }), [remoteData, viewer, start, end, granularity, maidId]);
   const totals = summarize(data);
@@ -105,14 +119,20 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
   });
   const presets = (days: number) => { const e = new Date(`${initialEnd}T12:00:00+09:00`); const s = new Date(e); s.setDate(e.getDate() - days + 1); setStart(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" }).format(s)); setEnd(initialEnd); };
 
-  return <div className="app-shell">
+  return <TestUserScopeContext.Provider value={includeTestUsers}><div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src="/logo-e.png" alt="Virtual at-home cafe" onError={(e) => { const img = e.currentTarget; img.style.display = "none"; const fb = img.nextElementSibling as HTMLElement | null; if (fb) fb.style.display = "grid"; }} /><div className="brand-mark" style={{ display: "none" }}>at</div></div>
       <nav>{nav.filter((item)=>!item.adminOnly || viewer.role === "admin").map((item)=><button key={item.id} className={view===item.id?"active":""} onClick={()=>setView(item.id)}><i>{item.icon}</i>{item.label}</button>)}</nav>
       <div className="sidebar-foot"><span className="status-dot"/>分析環境のみ参照<small>本番DBへの書き込みなし</small></div>
     </aside>
     <main className="main">
-      <header className="topbar"><div><p className="eyebrow">VIRTUAL AT-HOME CAFÉ</p><h1>{view === "overview" ? (viewer.role === "maid" ? "マイ実績" : "運営ダッシュボード") : nav.find((n)=>n.id===view)?.label}</h1></div><div className="account"><div className="avatar">{viewer.name.slice(0,1)}</div><div><strong>{viewer.name}</strong><small>{viewer.role === "admin" ? "管理者" : "メイド"}</small></div><LogoutButton /></div></header>
+      <header className="topbar"><div><p className="eyebrow">VIRTUAL AT-HOME CAFÉ</p><h1>{view === "overview" ? (viewer.role === "maid" ? "マイ実績" : "運営ダッシュボード") : nav.find((n)=>n.id===view)?.label}</h1></div>
+        {viewer.role === "admin" && <div className="test-user-switch" role="group" aria-label="テストユーザー" title="すべての画面の数値に効きます。メイド実績の月次実績はアプリが集計した値のため、切り替えの対象外です。">
+          <span>テストユーザー</span>
+          <button className={!includeTestUsers ? "selected" : ""} aria-pressed={!includeTestUsers} onClick={() => changeTestUsers(false)}>除く</button>
+          <button className={includeTestUsers ? "selected" : ""} aria-pressed={includeTestUsers} onClick={() => changeTestUsers(true)}>含む</button>
+        </div>}
+        <div className="account"><div className="avatar">{viewer.name.slice(0,1)}</div><div><strong>{viewer.name}</strong><small>{viewer.role === "admin" ? "管理者" : "メイド"}</small></div><LogoutButton /></div></header>
       {/* ユーザーDBは全会員の通算値を扱い期間に依存しないため、期間フィルタを表示しない。 */}
       {view !== "users" && <section className="filters">
         <div className="presets"><button onClick={()=>presets(1)}>今日</button><button onClick={()=>presets(7)}>7日</button><button onClick={()=>presets(30)}>30日</button><button className={start===initialStart&&end===initialEnd?"selected":""} onClick={()=>{setStart(initialStart);setEnd(initialEnd)}}>今月</button></div>
@@ -131,6 +151,7 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
         return <div className="freshness">
           <span className="status-dot" style={stale || degraded || freshness?.gaps?.length ? { background: "#d6336c" } : undefined}/>
           {" "}最終同期 {label} <b>・分析用データ</b>
+          {includeTestUsers && <span className="test-user-note"> ・テストユーザーを含めて表示中</span>}
           {stale && <span className="error-inline"> ・{Math.floor((freshness!.freshnessLagMinutes ?? 0) / 60)}時間以上更新されていません</span>}
           {degraded && <span className="error-inline"> ・一部のデータを取得できていません</span>}
           {freshness?.gaps?.length ? <span className="error-inline" title="毎朝、直近7営業日のご帰宅件数を本番と比べ、少ない日は自動で取り込み直しています。それでも少ないままの日です。">{" "}・取りこぼしの可能性: {freshness.gaps.map((g) => `${g.day.slice(5)}（本番${g.production}件／表示${g.dashboard}件）`).join("、")}</span> : null}
@@ -175,5 +196,5 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
 
       {view === "attendance" && <><AttendanceTable shifts={data.shifts} maids={data.maids} />{viewer.role === "admin" && <section className="panel table-panel submissions-panel"><div className="panel-head"><div><p className="eyebrow">DISCORD SUBMISSIONS</p><h2>Discord勤怠申請</h2><small>確認用一覧・シフト本体への自動反映なし</small></div></div>{submissionError ? <p className="error">{submissionError}</p> : <div className="table-scroll"><table><thead><tr><th>対象日</th><th>種別</th><th>メイド</th><th>対象時間</th><th>理由・補足</th><th>受付日時</th></tr></thead><tbody>{submissions.map((s)=><tr key={s.id}><td>{s.targetDate || "—"}</td><td><b>{s.eventLabel}</b></td><td>{s.maidName}</td><td>{s.targetTime || "—"}</td><td>{s.reason || "—"}</td><td>{s.receivedAt ? new Date(s.receivedAt).toLocaleString("ja-JP",{timeZone:"Asia/Tokyo"}) : "—"}</td></tr>)}{submissions.length === 0 && <tr><td colSpan={6}>申請はまだありません</td></tr>}</tbody></table></div>}</section>}</>}
     </main>
-  </div>;
+  </div></TestUserScopeContext.Provider>;
 }

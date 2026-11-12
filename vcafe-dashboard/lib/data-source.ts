@@ -3,6 +3,7 @@ import { mockAnalyticsData } from "./mock-data";
 import { filterData } from "./analytics";
 import { FREE_CHEKI_TYPES, visitRevenue } from "./metrics";
 import type { AnalyticsData, Booking, Customer, Maid, Shift, SyncFreshness, Visit } from "./types";
+import { testUserCondition } from "./test-users.ts";
 
 /**
  * 売上を経理の計上ロジックの単価で計算し直す（lib/metrics.ts visitRevenue）。
@@ -23,6 +24,8 @@ export interface DataQuery {
   start: string;
   end: string;
   maidId?: string;
+  /** テストユーザーを含めるか（既定は含めない）。lib/test-users.ts */
+  includeTestUsers?: boolean;
 }
 
 export async function loadAnalyticsData(query: DataQuery): Promise<AnalyticsData> {
@@ -34,7 +37,7 @@ export async function loadAnalyticsData(query: DataQuery): Promise<AnalyticsData
   if (!projectId || !dataset) throw new Error("BigQueryの環境変数が設定されていません");
   const bigquery = new BigQuery({ projectId });
   const location = process.env.BIGQUERY_LOCATION || "asia-northeast1";
-  const params: Record<string, Date | string | null> = { startDate: query.start, endDate: query.end, maidId: query.maidId ?? null };
+  const params: Record<string, Date | string | boolean | null> = { startDate: query.start, endDate: query.end, maidId: query.maidId ?? null, includeTestUsers: Boolean(query.includeTestUsers) };
   const [rows] = await bigquery.query({
     location,
     params,
@@ -54,6 +57,7 @@ export async function loadAnalyticsData(query: DataQuery): Promise<AnalyticsData
         FROM \`${projectId}.${dataset}.cheki_raw\`
         WHERE DATE(\`at\`) BETWEEN DATE_SUB(DATE(@startDate), INTERVAL 1 DAY) AND DATE_ADD(DATE(@endDate), INTERVAL 1 DAY)
           AND chekiType IN (${FREE_CHEKI_SQL})
+          AND ${testUserCondition()}
         GROUP BY customerId, maidId, business_date
       ), selected_visits AS (
         SELECT v.*, IF(v.cheki > 0, LEAST(v.cheki, COALESCE(f.n, 0)), 0) AS freeCheki
@@ -61,6 +65,7 @@ export async function loadAnalyticsData(query: DataQuery): Promise<AnalyticsData
         LEFT JOIN free_cheki f
           ON f.customerId = v.customerId AND f.maidId = v.maidId
          AND f.business_date = DATE(TIMESTAMP_SUB(v.\`at\`, INTERVAL 2 HOUR), "Asia/Tokyo")
+        WHERE ${testUserCondition("v")}
       ), selected_shifts AS (
         SELECT * FROM \`${projectId}.${dataset}.shifts_current_range\`(DATE(@startDate), DATE(@endDate), @maidId)
       ), customer_payments AS (
@@ -68,12 +73,13 @@ export async function loadAnalyticsData(query: DataQuery): Promise<AnalyticsData
         SELECT customerId, COUNT(*) AS paymentCount, SUM(amount) AS paymentAmount
         FROM \`${projectId}.${dataset}.payments_current_range\`(DATE(@startDate), DATE(@endDate))
         WHERE DATE(\`at\`, "Asia/Tokyo") BETWEEN DATE(@startDate) AND DATE(@endDate)
+          AND ${testUserCondition()}
         GROUP BY customerId
       ), selected_customers AS (
         SELECT c.*, COALESCE(p.paymentCount, 0) AS paymentCount, COALESCE(p.paymentAmount, 0) AS paymentAmount
         FROM \`${projectId}.${dataset}.customers_current\` c
         LEFT JOIN customer_payments p ON p.customerId = c.id
-        WHERE c.id IN (SELECT DISTINCT customerId FROM selected_visits)
+        WHERE c.id IN (SELECT DISTINCT customerId FROM selected_visits) AND ${testUserCondition("c")}
       )
       SELECT 'maid' AS kind, TO_JSON_STRING(t) AS payload
       FROM \`${projectId}.${dataset}.maids_current\` t ${query.maidId ? "WHERE id = @maidId" : ""}
@@ -104,7 +110,7 @@ async function loadBookings(bigquery: BigQuery, location: string, projectId: str
   try {
     const [rows] = await bigquery.query({
       location,
-      params: { startDate: query.start, endDate: query.end, maidId: query.maidId ?? null },
+      params: { startDate: query.start, endDate: query.end, maidId: query.maidId ?? null, includeTestUsers: Boolean(query.includeTestUsers) },
       types: { maidId: "STRING" },
       maximumBytesBilled: process.env.BIGQUERY_MAX_BYTES_BILLED || "1073741824",
       query: `
@@ -112,6 +118,7 @@ async function loadBookings(bigquery: BigQuery, location: string, projectId: str
         FROM \`${projectId}.${dataset}.bookings_current\`
         WHERE DATE(TIMESTAMP_SUB(\`at\`, INTERVAL 2 HOUR), "Asia/Tokyo") BETWEEN DATE(@startDate) AND DATE(@endDate)
           AND (@maidId IS NULL OR maidId = @maidId)
+          AND ${testUserCondition()}
       `,
     });
     return rows.map((row) => {

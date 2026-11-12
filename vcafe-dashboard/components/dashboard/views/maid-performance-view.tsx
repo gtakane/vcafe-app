@@ -78,7 +78,7 @@ export default function MaidReports({ viewer }: { viewer: Viewer }) {
   const monthLabel = (m: string) => (m ? `${m.slice(0, 4)}年${m.slice(4, 6)}月` : "");
   return <section className="panel table-panel">
     <div className="panel-head">
-      <div><p className="eyebrow">MAID PERFORMANCE</p><h2>{viewer.role === "admin" ? "メイド実績（月次）" : "あなたの実績（月次）"}</h2><small>本番 maidWorkReport の月次実績</small></div>
+      <div><p className="eyebrow">MAID PERFORMANCE</p><h2>{viewer.role === "admin" ? "メイド実績（月次）" : "あなたの実績（月次）"}</h2><small>アプリが集計した月次実績（maidWorkReport）。テストユーザーの切り替えの対象外です</small></div>
       <div style={{ display: "flex", gap: ".6rem", alignItems: "center" }}>
         <label>月 <select value={month} onChange={(e) => setMonth(e.target.value)}>{(data?.months || []).map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select></label>
         <button className="secondary" onClick={() => downloadReportCsv(rows, month)} disabled={!rows.length}>CSV出力</button>

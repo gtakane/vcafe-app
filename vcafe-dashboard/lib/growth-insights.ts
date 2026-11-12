@@ -10,6 +10,7 @@
 
 import { businessDateJst, isPaid } from "./metrics.ts";
 import type { Visit } from "./types";
+import { testUserCondition } from "./test-users.ts";
 
 export const FIRST_PAYMENT_WINDOW_DAYS = 14;
 export const COHORT_MONTHS = 12;
@@ -200,7 +201,7 @@ const tsIso = (value: unknown): string | null => {
 };
 
 /** BigQuery から必要な行を取り、指標を計算する。 */
-export async function loadGrowthInsights(range: { start: string; end: string }): Promise<GrowthInsights> {
+export async function loadGrowthInsights(range: { start: string; end: string }, includeTestUsers = false): Promise<GrowthInsights> {
   const projectId = process.env.BIGQUERY_PROJECT_ID;
   const dataset = process.env.BIGQUERY_DATASET;
   if (!projectId || !dataset) throw new Error("BigQueryの環境変数が設定されていません");
@@ -210,23 +211,24 @@ export async function loadGrowthInsights(range: { start: string; end: string }):
   const maximumBytesBilled = process.env.BIGQUERY_MAX_BYTES_BILLED || "1073741824";
   const months = monthsBack(range.end.slice(0, 7), COHORT_MONTHS);
   const from = `${months[0]}-01`; // 12か月前の月初
-  const params = { from, start: range.start, end: range.end };
+  const params = { from, start: range.start, end: range.end, includeTestUsers };
+  const tu = (alias?: string) => testUserCondition(alias);
   const t = (name: string) => `\`${projectId}.${dataset}.${name}\``;
   const run = async (query: string) => (await bigquery.query({ location, params, maximumBytesBilled, query }))[0] as Array<Record<string, unknown>>;
 
-  const registered = `(SELECT id FROM ${t("customers_current")} WHERE registeredAt IS NOT NULL AND DATE(registeredAt, "Asia/Tokyo") >= DATE(@from))`;
+  const registered = `(SELECT id FROM ${t("customers_current")} WHERE registeredAt IS NOT NULL AND DATE(registeredAt, "Asia/Tokyo") >= DATE(@from) AND ${tu()})`;
   // 集計はできるだけ BigQuery 側で済ませ、サーバーには要約だけを返す（メモリ512MBの制約）。
   const [regRows, firstRows, paidMonthRows, monthlyRows, recentRows, visitRows, usageRows] = await Promise.all([
-    run(`SELECT id, registeredAt FROM ${t("customers_current")} WHERE registeredAt IS NOT NULL AND DATE(registeredAt, "Asia/Tokyo") >= DATE(@from)`),
+    run(`SELECT id, registeredAt FROM ${t("customers_current")} WHERE registeredAt IS NOT NULL AND DATE(registeredAt, "Asia/Tokyo") >= DATE(@from) AND ${tu()}`),
     // 初回課金は全期間で見る（12か月より前に課金した人を「初回」と誤認しないため）。
-    run(`SELECT customerId, MIN(\`at\`) AS firstAt FROM ${t("payments_current")} WHERE customerId IN ${registered} GROUP BY customerId`),
+    run(`SELECT customerId, MIN(\`at\`) AS firstAt FROM ${t("payments_current")} WHERE customerId IN ${registered} AND ${tu()} GROUP BY customerId`),
     run(`SELECT DISTINCT customerId, FORMAT_DATE("%Y-%m", DATE(\`at\`, "Asia/Tokyo")) AS month
-         FROM ${t("payments_current_range")}(DATE(@from), CURRENT_DATE("Asia/Tokyo")) WHERE customerId IN ${registered}`),
+         FROM ${t("payments_current_range")}(DATE(@from), CURRENT_DATE("Asia/Tokyo")) WHERE customerId IN ${registered} AND ${tu()}`),
     run(`SELECT FORMAT_DATE("%Y-%m", DATE(\`at\`, "Asia/Tokyo")) AS month, COUNT(DISTINCT customerId) AS payingUsers, SUM(amount) AS amount
-         FROM ${t("payments_current_range")}(DATE(@from), DATE(@end)) WHERE DATE(\`at\`, "Asia/Tokyo") >= DATE(@from) GROUP BY month`),
-    run(`SELECT customerId, \`at\`, amount FROM ${t("payments_current_range")}(DATE "2026-11-05", CURRENT_DATE("Asia/Tokyo"))`),
+         FROM ${t("payments_current_range")}(DATE(@from), DATE(@end)) WHERE DATE(\`at\`, "Asia/Tokyo") >= DATE(@from) AND ${tu()} GROUP BY month`),
+    run(`SELECT customerId, \`at\`, amount FROM ${t("payments_current_range")}(DATE "2026-11-05", CURRENT_DATE("Asia/Tokyo")) WHERE ${tu()}`),
     // 無料ご帰宅は2026-11-06開始。期間の開始から今日までのご帰宅（その後の有料化を見るため）。
-    run(`SELECT customerId, maidId, \`at\`, type, entryType FROM ${t("visits_current_range")}(GREATEST(DATE(@start), DATE "2026-11-06"), CURRENT_DATE("Asia/Tokyo"), NULL)`),
+    run(`SELECT customerId, maidId, \`at\`, type, entryType FROM ${t("visits_current_range")}(GREATEST(DATE(@start), DATE "2026-11-06"), CURRENT_DATE("Asia/Tokyo"), NULL) WHERE ${tu()}`),
     // 有料利用（消費）の月次。経理と同じ単価（metrics.ts visitRevenue と同じ式）＋予約・招待。
     run(`
       WITH v AS (
@@ -234,11 +236,11 @@ export async function loadGrowthInsights(range: { start: string; end: string }):
           ROUND(COALESCE(billedCoin, 0) * 1.19) + ROUND(COALESCE(billedRewardPoint, 0) * 1.1)
           + CASE ticketId WHEN "gokitaku30minutes" THEN 850 WHEN "premiumGokitaku1" THEN 960 WHEN "luckyGokitaku" THEN 650 ELSE 0 END * COALESCE(usedTicketCount, 1) AS yen
         FROM ${t("visits_current_range")}(DATE(@from), DATE(@end), NULL)
-        WHERE type NOT IN ("free", "trial", "reservation") AND ticketId IS NOT NULL
+        WHERE type NOT IN ("free", "trial", "reservation") AND ticketId IS NOT NULL AND ${tu()}
       ), b AS (
         SELECT customerId, FORMAT_DATE("%Y-%m", DATE(TIMESTAMP_SUB(\`at\`, INTERVAL 2 HOUR), "Asia/Tokyo")) AS month, revenue AS yen
         FROM ${t("bookings_current")}
-        WHERE NOT COALESCE(canceled, FALSE) AND DATE(TIMESTAMP_SUB(\`at\`, INTERVAL 2 HOUR), "Asia/Tokyo") BETWEEN DATE(@from) AND DATE(@end)
+        WHERE NOT COALESCE(canceled, FALSE) AND DATE(TIMESTAMP_SUB(\`at\`, INTERVAL 2 HOUR), "Asia/Tokyo") BETWEEN DATE(@from) AND DATE(@end) AND ${tu()}
       )
       SELECT month, COUNT(DISTINCT customerId) AS usingUsers, SUM(yen) AS usage FROM (SELECT * FROM v UNION ALL SELECT * FROM b) GROUP BY month`).catch(() => []),
   ]);

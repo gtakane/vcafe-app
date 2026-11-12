@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
 import { CUSTOMER_NUMERIC_KEYS, loadAllCustomers, loadCustomers, type NumericFilter } from "@/lib/customers";
+import { includeTestUsersFrom, TEST_USERS_PARAM } from "@/lib/test-users";
 
 // min_<列名>/max_<列名> 形式のクエリを数値フィルタへ変換する（列名はホワイトリスト照合）。
 function parseNumericFilters(params: URLSearchParams): NumericFilter[] {
@@ -22,10 +23,11 @@ export async function GET(request: NextRequest) {
   if (!viewer) return NextResponse.json({ error: "認証が必要です" }, { status: 401 });
   if (viewer.role !== "admin") return NextResponse.json({ error: "権限がありません" }, { status: 403 });
   const params = request.nextUrl.searchParams;
+  const includeTestUsers = includeTestUsersFrom(params.get(TEST_USERS_PARAM), viewer.role);
   // all=1 … 全会員を一度に返す（画面側で絞り込み・並び替えを行う）。refresh=1 で再取得。
   if (params.get("all") === "1") {
     try {
-      const result = await loadAllCustomers({ refresh: params.get("refresh") === "1" });
+      const result = await loadAllCustomers({ refresh: params.get("refresh") === "1", includeTestUsers });
       return NextResponse.json(result, { headers: { "Cache-Control": "private, no-store" } });
     } catch (error) {
       console.error("ユーザー一覧の取得に失敗しました", error);
@@ -45,6 +47,7 @@ export async function GET(request: NextRequest) {
       sort: params.get("sort") || undefined,
       dir: params.get("dir") === "desc" ? "desc" : "asc",
       limit: Number(params.get("limit")) || undefined,
+      includeTestUsers,
     });
     return NextResponse.json(result, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
