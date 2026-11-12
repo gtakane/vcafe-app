@@ -66,9 +66,7 @@ cd ~/vcafe-app && git pull --ff-only
 画面の変更点: 概要に「無料枠ご帰宅」カードと「無料枠の内訳」、明細の種別・チケット名、
 ユーザー一覧に「無料枠」列。
 
-> 2026-11-12時点でトラフィック100%は `vcafe-dashboard-18da493-0728-1916`。
-> 7/29 の `ff91dad`（BigQuery のスキャン量削減）は作成済みだが切替されていない。
-> 今回の配備でまとめて反映される。
+> 2026-11-12 に `b0cb29e` を本番へ切替済み（7/29 の `ff91dad` 以降の変更をまとめて反映）。
 
 ## 追加: テスト用メイドの除外
 
@@ -130,3 +128,43 @@ cd ~/vcafe-app && git pull --ff-only
 | 3 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step4-backfill.sh 2026-10-01`（課金の購入元・全会員の残高・最初の残高記録） |
 | 4 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/verify-purchases.sh 2026-10`（課金台帳と各社の報告の比較） |
 | 5 | `bash ~/vcafe-app/vcafe-dashboard/deploy-revision-tokyo.sh` → 検証用URLで確認 → `promote-latest-canary.sh` |
+
+## 毎朝5時の自動処理（取りこぼし検知）
+
+同期ジョブは毎朝5時の回で、次を自動で行う。
+
+1. 全会員の未使用残高の合計を `balance_snapshots` に1行記録する。
+2. 直近7営業日（JST 2:00〜翌2:00）について、本番のご帰宅件数とダッシュボードの件数を比べる。
+   差が「5件または5%の大きい方」を超えた日は、その日を取り込み直す。
+3. 取り込み直した日は、読んだ本番の記録からテストユーザー・テスト用メイドの分を除いた件数で判定し直し、
+   結果を `dq_results` に残す。合格しなかった日は、ダッシュボードの鮮度表示に欠落として出る。
+
+今すぐ1回実行して結果を見る:
+`bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/run-daily-checks-now.sh`
+
+| 列 | 意味 |
+| --- | --- |
+| production | 本番の全件（テストユーザー・テスト用メイドを含む） |
+| dashboard | ダッシュボード側の件数 |
+| expected_excl_test | 取り込み直した日だけ。テストの分を除いた件数（判定に使う） |
+| unresolved_maid | メイドを特定できず取り込めなかった件数。0でなければ実データの欠けで、名簿に無いメイドなどを調べる |
+
+> 2026-11-06（無料ご帰宅の公開日）は本番219件・ダッシュボード201件で、差18件はすべてテストの分だった。
+
+## 月初の作業（毎月）
+
+月の確定売上（概要画面）を経理と一致させるため、前月分の各社の報告額を登録する。
+
+`bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/set-platform-purchases.sh 2026-11 <Apple> <Google> <Stripe>`
+
+| 値 | 確認先 |
+| --- | --- |
+| Apple | App Store Connect「支払と財務報告」の推定収益（手数料控除後・Appleの会計月。11月は 11/1〜11/28） |
+| Google | Google Play のお支払いプロファイルの当月分（手数料控除後） |
+| Stripe | Stripe の当月の決済額（総額） |
+
+未登録の月は課金台帳から推計した値を使い、画面に「暫定」と表示する。
+前月の確定には当月1日朝の残高記録が必要（11月分は 12/1 朝5時の記録後に確定）。
+
+> Google は 2026年10月、課金台帳からの推計（236,177円）が経理の値（188,615円）より約25%多く、原因は未特定。
+> 報告額を登録すれば確定売上には影響しない。
