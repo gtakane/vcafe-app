@@ -27,6 +27,9 @@ test("ticketLabel/typeLabel: 日本語表示に変換する", () => {
   assert.equal(ticketLabel("unknownTicket"), "unknownTicket"); // 未知IDはそのまま
   assert.equal(typeLabel("reservation"), "予約");
   assert.equal(typeLabel("trial"), "お試し");
+  assert.equal(typeLabel("free", "freeGokitaku", "freeTicket"), "無料ご帰宅券");
+  assert.equal(typeLabel("free", "ATCOIN", "newUserFree"), "新規ユーザー無料");
+  assert.equal(typeLabel("free", "ATCOIN", "freshMaidFree"), "新人メイド無料");
 });
 
 test("buildMaidVisitLogs: 明細に滞在時間・チケット・支払い・ユーザー名が入る", () => {

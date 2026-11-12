@@ -10,7 +10,7 @@ import { CHEKI_PRICE } from "./metrics.ts";
  *
  * 対応関係:
  *   visits        = SUM(weight)                       … weightedVisitCount
- *   paid          = SUM(IF(type != 'trial', weight, 0)) … weightedPaidCount（予約も有料）
+ *   paid          = SUM(IF(type NOT IN ('trial', 'free'), weight, 0)) … weightedPaidCount（予約も有料・無料枠は除く）
  *   revenue       = SUM(revenue + cheki * CHEKI_PRICE)
  *   customerCount = COUNT(DISTINCT customerId)
  *   cheki         = SUM(cheki)
@@ -34,7 +34,7 @@ export function buildSummarySql(projectId: string, dataset: string, maidId?: str
     )
     SELECT
       COALESCE((SELECT SUM(weight) FROM v), 0) AS visits,
-      COALESCE((SELECT SUM(IF(type != 'trial', weight, 0)) FROM v), 0) AS paid,
+      COALESCE((SELECT SUM(IF(type NOT IN ('trial', 'free'), weight, 0)) FROM v), 0) AS paid,
       COALESCE((SELECT SUM(revenue + cheki * ${CHEKI_PRICE}) FROM v), 0) AS revenue,
       (SELECT COUNT(DISTINCT customerId) FROM v) AS customerCount,
       COALESCE((SELECT SUM(cheki) FROM v), 0) AS cheki,

@@ -3,6 +3,9 @@ import test from "node:test";
 import {
   businessDateJst,
   classifyVisit,
+  countFreeKinds,
+  freeKindOf,
+  isFree,
   isPaid,
   shiftActualHours,
   shiftLateMinutes,
@@ -85,4 +88,33 @@ test("shift hours fill missing punches with schedule (core.py calc_shift_detail)
   const noPunch = { scheduledStart: "2026-07-21T10:00:00Z", scheduledEnd: "2026-07-21T14:30:00Z", actualStart: null, actualEnd: null };
   assert.equal(shiftActualHours(noPunch), 4.5);
   assert.equal(shiftLateMinutes(noPunch), 0);
+});
+
+
+test("無料ご帰宅3種とお試しは無料枠。予約より無料判定を優先する", () => {
+  assert.equal(classifyVisit("freeGokitaku", "workshift"), "free");
+  assert.equal(classifyVisit("ATCOIN", "workshift", { isFreeEntry: true, entryType: "newUserFree" }), "free");
+  assert.equal(classifyVisit("ATCOIN", "reservation", { isFreeEntry: true, entryType: "freshMaidFree" }), "free");
+  assert.equal(classifyVisit("trial10minutes", "workshift"), "trial");
+  assert.equal(classifyVisit("ATCOIN", "workshift", { isFreeEntry: false }), "paid");
+  assert.equal(isFree("free"), true);
+  assert.equal(isFree("trial"), true);
+  assert.equal(isPaid("free"), false);
+  assert.equal(visitRevenue("free", "freeGokitaku", 0, 0), 0);
+});
+
+test("無料枠の内訳：未知の entryType は件数を落とさず「その他の無料」に寄せる", () => {
+  assert.equal(freeKindOf("free", "freeGokitaku", null), "freeTicket");
+  assert.equal(freeKindOf("free", "ATCOIN", "newUserFree"), "newUserFree");
+  assert.equal(freeKindOf("free", "ATCOIN", "campaignFree"), "otherFree");
+  assert.equal(freeKindOf("trial", "trial10minutes", null), "trial");
+  assert.equal(freeKindOf("paid", "ATCOIN", null), null);
+  const counts = countFreeKinds([
+    { type: "free", ticketId: "freeGokitaku", entryType: "freeTicket" },
+    { type: "free", ticketId: "ATCOIN", entryType: "newUserFree" },
+    { type: "free", ticketId: "ATCOIN", entryType: "freshMaidFree" },
+    { type: "trial", ticketId: "trial10minutes", entryType: null },
+    { type: "paid", ticketId: "ATCOIN", entryType: null },
+  ]);
+  assert.deepEqual(counts, { trial: 1, freeTicket: 1, newUserFree: 1, freshMaidFree: 1, otherFree: 0 });
 });

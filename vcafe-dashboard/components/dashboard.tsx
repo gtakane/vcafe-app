@@ -49,6 +49,7 @@ const CUSTOMER_COLUMNS: Array<{ key: keyof CustomerRow; label: string; kind: "te
   { key: "visits", label: "ご帰宅(期間)", kind: "num" },
   { key: "sessions", label: "来店セッション数", kind: "num" },
   { key: "paidVisits", label: "有料", kind: "num" },
+  { key: "freeVisits", label: "無料枠", kind: "num" },
   { key: "reservations", label: "予約", kind: "num" },
   { key: "cheki", label: "チェキ", kind: "num" },
   { key: "spend", label: "利用額(期間)", kind: "money" },

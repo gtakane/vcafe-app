@@ -1,5 +1,5 @@
 import type { AnalyticsData, MaidVisitLog, PresentLike, Viewer, Visit } from "./types";
-import { businessDateJst, DEFAULT_INITIAL_TIME, FREE_TICKET_IDS, TICKET_PRICES } from "./metrics.ts";
+import { businessDateJst, DEFAULT_INITIAL_TIME, FREE_KIND_LABELS, FREE_TICKET_IDS, freeKindOf, TICKET_PRICES } from "./metrics.ts";
 // 実接客時間の算出は metrics.ts（サーバー依存なしの共通ロジック）にある。
 export { mergedStayMinutes } from "./metrics.ts";
 
@@ -12,6 +12,7 @@ const TICKET_LABELS: Record<string, string> = {
   premiumGokitaku1: "プレミアムご帰宅チケット",
   luckyGokitaku: "ラッキーご帰宅チケット",
   trial10minutes: "お試しご帰宅チケット",
+  freeGokitaku: "無料ご帰宅券",
 };
 
 export function ticketLabel(ticketId: string): string {
@@ -19,16 +20,17 @@ export function ticketLabel(ticketId: string): string {
   return TICKET_LABELS[ticketId] || ticketId;
 }
 
-export function typeLabel(type: Visit["type"]): string {
+export function typeLabel(type: Visit["type"], ticketId?: string | null, entryType?: string | null): string {
   if (type === "reservation") return "予約";
-  if (type === "trial") return "お試し";
-  if (type === "free") return "無料";
+  const freeKind = freeKindOf(type, ticketId, entryType);
+  if (freeKind) return FREE_KIND_LABELS[freeKind];
   return "有料";
 }
 
 /** 支払い手段。チケットIDが既知チケットならチケット、ATCOIN/未設定でコイン消費があればコイン払い。 */
 export function paymentLabel(type: Visit["type"], ticketId: string, billedCoin: number, billedRewardPoint: number): string {
   if (type === "reservation") return "予約";
+  if (type === "free") return "無料";
   if (FREE_TICKET_IDS.has(ticketId)) return "無料(お試し)";
   if (ticketId && ticketId !== "ATCOIN" && ticketId in TICKET_PRICES) return "チケット";
   if (billedCoin > 0 && billedRewardPoint > 0) return "あっとコイン+リワードP";
@@ -78,7 +80,7 @@ export function buildMaidVisitLogs(
         maidId: visit.maidId,
         maidName: maidNames.get(visit.maidId) || "—",
         type: visit.type,
-        typeLabel: typeLabel(visit.type),
+        typeLabel: typeLabel(visit.type, ticketId, visit.entryType),
         // リワードポイント払い等では initialTime に実測の小数分が入る（例 9.7757…）。
         // そのまま表示すると「9.776」が千区切りの 9,776 に見えるため、分は整数へ丸める。
         minutes: Math.round(visit.minutes ?? DEFAULT_INITIAL_TIME),

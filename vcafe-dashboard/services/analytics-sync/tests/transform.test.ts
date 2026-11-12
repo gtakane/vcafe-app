@@ -177,3 +177,35 @@ test("mapShift: メイドを特定できないシフトは reject する", () =>
   } }, new Map());
   assert.equal(shift, null);
 });
+
+test("11/6以降の無料ご帰宅3種を isFreeEntry/entryType で無料に分類し、売上0にする", () => {
+  const base = { maidId: "maid-1", enterDateTime: timestamp("2026-11-07T11:00:00Z"), roomType: "workshift", billedCoin: 0, billedRewardPoint: 0 };
+  const ticket = mapVisit({ id: "f-1", parentId: "user-1", data: { ...base, usedTicketItemId: "freeGokitaku", isFreeEntry: true, entryType: "freeTicket", durationMinutes: 10, initialTime: 10 } }, secret, new Map());
+  assert.equal(ticket?.type, "free");
+  assert.equal(ticket?.entryType, "freeTicket");
+  assert.equal(ticket?.revenue, 0);
+  // 20分の2種はチケットIDを持たない（ATCOIN扱い）。isFreeEntry が無ければ有料に誤分類される。
+  const newUser = mapVisit({ id: "f-2", parentId: "user-1", data: { ...base, isFreeEntry: true, entryType: "newUserFree", durationMinutes: 20, initialTime: 20 } }, secret, new Map());
+  assert.equal(newUser?.type, "free");
+  assert.equal(newUser?.entryType, "newUserFree");
+  assert.equal(newUser?.revenue, 0);
+  const fresh = mapVisit({ id: "f-3", parentId: "user-1", data: { ...base, isFreeEntry: true, entryType: "freshMaidFree", initialTime: 20 } }, secret, new Map());
+  assert.equal(fresh?.type, "free");
+  assert.equal(fresh?.entryType, "freshMaidFree");
+});
+
+test("消費コインの購入元とチケット枚数を保存する", () => {
+  const visit = mapVisit({ id: "v-9", parentId: "user-1", data: { maidId: "maid-1", enterDateTime: timestamp("2026-11-07T11:00:00Z"), usedTicketItemId: "ATCOIN", billedCoin: 600, billedCoinVendor: "apple", usedTicketCount: 2, initialTime: 40 } }, secret, new Map());
+  assert.equal(visit?.billedCoinVendor, "apple");
+  assert.equal(visit?.usedTicketCount, 2);
+  assert.equal(visit?.entryType, null);
+  assert.equal(visit?.type, "paid");
+});
+
+test("新しい列は schema manifest に登録されている（未登録だと挿入時に行ごと弾かれる）", async () => {
+  const manifest = (await import("../src/schema-manifest.json", { with: { type: "json" } })).default as { tables: Record<string, Record<string, string>> };
+  const cols = manifest.tables.visits_raw;
+  assert.equal(cols.entryType, "STRING");
+  assert.equal(cols.billedCoinVendor, "STRING");
+  assert.equal(cols.usedTicketCount, "INT64");
+});

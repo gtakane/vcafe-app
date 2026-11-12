@@ -19,9 +19,9 @@ test("ご帰宅数は重み合計（件数ではない）", () => {
   assert.ok(!/COUNT\(\*\)\s+AS visits/.test(sql), "件数で数えている");
 });
 
-test("有料数は trial 以外の重み合計（予約も有料に含む）", () => {
-  assert.match(sql, /SUM\(IF\(type != 'trial', weight, 0\)\)[\s\S]*?AS paid/);
-  // 予約を除外していないこと（core.py: 有料=非trial）
+test("有料数は無料枠（お試し・無料3種）以外の重み合計（予約も有料に含む）", () => {
+  assert.match(sql, /SUM\(IF\(type NOT IN \('trial', 'free'\), weight, 0\)\)[\s\S]*?AS paid/);
+  // 予約を除外していないこと
   assert.ok(!/type != 'reservation'/.test(sql), "予約を有料から除外している");
 });
 

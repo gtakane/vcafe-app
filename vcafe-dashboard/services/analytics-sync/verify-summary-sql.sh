@@ -24,7 +24,7 @@ bq --project_id="${PROJECT_ID}" query --use_legacy_sql=false --format=pretty \
  )
  SELECT
    COALESCE((SELECT SUM(weight) FROM v), 0) AS visits,
-   COALESCE((SELECT SUM(IF(type != 'trial', weight, 0)) FROM v), 0) AS paid,
+   COALESCE((SELECT SUM(IF(type NOT IN ('trial', 'free'), weight, 0)) FROM v), 0) AS paid,
    COALESCE((SELECT SUM(revenue + cheki * 500) FROM v), 0) AS revenue,
    (SELECT COUNT(DISTINCT customerId) FROM v) AS customerCount,
    COALESCE((SELECT SUM(cheki) FROM v), 0) AS cheki,

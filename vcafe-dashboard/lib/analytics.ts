@@ -2,6 +2,8 @@ import type { AnalyticsData, Customer, Granularity, Viewer, ViewerScopedData, Vi
 import {
   businessDateJst,
   CHEKI_PRICE,
+  countFreeKinds,
+  isFree,
   isPaid,
   shiftActualHours,
   shiftLateMinutes,
@@ -112,7 +114,10 @@ export function summarize(data: ViewerScopedData) {
   const cheki = data.visits.reduce((sum, v) => sum + v.cheki, 0);
   const workMinutes = data.shifts.reduce((sum, s) => sum + shiftActualHours(s) * 60, 0);
   const lateMinutes = data.shifts.reduce((sum, s) => sum + shiftLateMinutes(s), 0);
-  return { visits: weightedVisitCount(data.visits), revenue, customerCount, paid, cheki, workHours: workMinutes / 60, lateMinutes };
+  // 無料枠（お試し＋11/6以降の無料3種）。内訳は実件数（無料ご帰宅は10分/20分で重み1のため件数と一致）。
+  const freeKinds = countFreeKinds(data.visits);
+  const free = data.visits.filter((v) => isFree(v.type)).length;
+  return { visits: weightedVisitCount(data.visits), revenue, customerCount, paid, free, freeKinds, cheki, workHours: workMinutes / 60, lateMinutes };
 }
 
 function bucketKey(at: string, granularity: Granularity) {
@@ -161,7 +166,8 @@ export function maidRows(data: ViewerScopedData) {
     const nonReservationWeight = visits.reduce((sum, v) => sum + (v.type === "reservation" ? 0 : v.weight ?? 1), 0);
     const weightedVisits = weightedVisitCount(visits);
     const repeatUsers = [...new Set(visits.map((v) => v.customerId))].filter((id) => visits.filter((v) => v.customerId === id).length >= 2).length;
-    return { ...maid, visits: weightedVisits, users, cheki, revenue, workHours, perHour: workHours ? nonReservationWeight / workHours : 0, repeatRate: users ? repeatUsers / users : 0 };
+    const freeVisits = visits.filter((v) => isFree(v.type)).length;
+    return { ...maid, visits: weightedVisits, users, cheki, revenue, freeVisits, workHours, perHour: workHours ? nonReservationWeight / workHours : 0, repeatRate: users ? repeatUsers / users : 0 };
   });
   // 人気度スコア: ご帰宅数・平均ご帰宅数(件/h)・チェキ数 を各最大値で正規化して平均（0〜1）。
   // 単純なご帰宅数だけでなく、時間あたり効率とチェキ実績も加味する。
@@ -206,6 +212,7 @@ export function customerRows(data: ViewerScopedData) {
       sessions: visits.length,
       spend,
       paidVisits: visits.filter((v) => isPaid(v.type)).length,
+      freeVisits: visits.filter((v) => isFree(v.type)).length,
       reservations: visits.filter((v) => v.type === "reservation").length,
       cheki: visits.reduce((sum, v) => sum + v.cheki, 0),
       avgSpend: visits.length ? Math.round(spend / visits.length) : 0,

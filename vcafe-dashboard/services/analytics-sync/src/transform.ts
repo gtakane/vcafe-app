@@ -92,7 +92,11 @@ export function mapVisit(document: SourceDocument, secret: string, maidIdsByNick
   const billedCoin = numberValue(document.data.billedCoin);
   const billedReward = numberValue(document.data.billedRewardPoint);
   // 分類・収益・重みは lib/metrics.ts（core.py と一致する単一の正典）に委譲する。
-  const type = classifyVisit(ticketId, roomType);
+  // 11/6以降の無料ご帰宅3種は isFreeEntry / entryType で判定する（チケットIDだけでは20分の2種を区別できない）。
+  const entryType = document.data.entryType == null ? null : String(document.data.entryType);
+  const type = classifyVisit(ticketId, roomType, { isFreeEntry: document.data.isFreeEntry, entryType });
+  const billedCoinVendor = document.data.billedCoinVendor ? String(document.data.billedCoinVendor) : null;
+  const usedTicketCount = document.data.usedTicketCount == null ? null : Math.round(numberValue(document.data.usedTicketCount));
   const revenue = visitRevenue(type, ticketId, billedCoin, billedReward);
   const minutes = numberValue(document.data.initialTime) || DEFAULT_INITIAL_TIME;
   const weight = visitWeight(minutes);
@@ -108,6 +112,7 @@ export function mapVisit(document: SourceDocument, secret: string, maidIdsByNick
     type, revenue, cheki: 0, weight,
     // 明細表示用（どのチケットで何分、コイン払いか）。
     ticketId, minutes, billedCoin, billedRewardPoint: billedReward,
+    entryType, billedCoinVendor, usedTicketCount,
   };
 }
 

@@ -57,6 +57,9 @@
       "minutes": "FLOAT64",
       "billedCoin": "FLOAT64",
       "billedRewardPoint": "FLOAT64",
+      "entryType": "STRING",
+      "billedCoinVendor": "STRING",
+      "usedTicketCount": "INT64",
       "recordKey": "STRING",
       "runId": "STRING"
     },

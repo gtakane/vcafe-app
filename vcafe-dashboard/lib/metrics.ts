@@ -5,6 +5,8 @@
 //   TICKET_PRICES / RESERVATION_PRICE / CHEKI_PRICE / 係数1.4  → 下記定数
 //   _calc_revenue                                            → visitRevenue()
 //   _classify_type（無料=trialのみ, それ以外=有料）           → classifyVisit() / isPaid()
+//     ※2026-11-06以降の無料ご帰宅3種（isFreeEntry/entryType）は本ファイル側でのみ判定している。
+//       core.py（Streamlit版）は未対応のため、11/6以降の有料件数はStreamlit版と一致しない。
 //   visitWeight = max(1, round(initialTime/20))              → visitWeight()
 //   _biz_date（0:00〜1:59を前日扱い）                          → businessDateJst()
 //   calc_shift_detail（serve*.fillna(open/close)）           → shiftActualHours() / shiftLateMinutes()
@@ -28,7 +30,32 @@ export const TICKET_PRICES: Record<string, number> = {
 export const RESERVATION_PRICE = 3920;
 export const CHEKI_PRICE = 500;
 export const COIN_TO_YEN = 1.4; // フォールバック係数（core.py と一致）
+// お試しご帰宅（従来からある10分無料）。チケットIDで判定する。
 export const FREE_TICKET_IDS = new Set(["trial10minutes"]);
+// 2026-11-06（ver1.4.7/1.4.8）から始まった無料ご帰宅。ご帰宅記録の isFreeEntry=true と entryType で判定する。
+//   freeTicket    … 無料ご帰宅券（10分・毎月1枚配布。usedTicketItemId=freeGokitaku）
+//   newUserFree   … 新規ユーザー無料ご帰宅（20分・登録後14日以内・メイドごとに1回）
+//   freshMaidFree … 新人メイド無料ご帰宅（20分・デビュー後の一定期間・1回）
+export const FREE_ENTRY_TICKET_IDS = new Set(["freeGokitaku"]);
+export type FreeKind = "trial" | "freeTicket" | "newUserFree" | "freshMaidFree" | "otherFree";
+export const FREE_KINDS: FreeKind[] = ["trial", "freeTicket", "newUserFree", "freshMaidFree", "otherFree"];
+export const FREE_KIND_LABELS: Record<FreeKind, string> = {
+  trial: "お試し",
+  freeTicket: "無料ご帰宅券",
+  newUserFree: "新規ユーザー無料",
+  freshMaidFree: "新人メイド無料",
+  otherFree: "その他の無料",
+};
+
+/** ご帰宅記録の無料関連フィールド（Firestore の値そのまま）。 */
+export interface FreeEntryFields {
+  isFreeEntry?: unknown;
+  entryType?: unknown;
+}
+
+function isTrue(value: unknown): boolean {
+  return value === true || value === "true";
+}
 export const DEFAULT_INITIAL_TIME = 20; // core.py: initialTime 既定値
 
 export type VisitType = Visit["type"];
@@ -40,8 +67,16 @@ export function visitWeight(initialTime: number | null | undefined): number {
   return Math.max(1, Math.round(safe / DEFAULT_INITIAL_TIME));
 }
 
-/** 訪問種別。core.py: 無料=trialチケットのみ、予約はroomType、それ以外は有料。 */
-export function classifyVisit(ticketId: string, roomType: string): VisitType {
+/**
+ * 訪問種別。
+ *   free        … 11/6以降の無料ご帰宅3種（isFreeEntry=true、または無料ご帰宅券のチケットID）
+ *   trial       … お試しご帰宅（trial10minutes）
+ *   reservation … 予約（roomType）
+ *   paid        … それ以外
+ * 無料の判定を予約より先に行う（無料枠での予約が来ても売上にしない）。
+ */
+export function classifyVisit(ticketId: string, roomType: string, entry: FreeEntryFields = {}): VisitType {
+  if (isTrue(entry.isFreeEntry) || FREE_ENTRY_TICKET_IDS.has(ticketId)) return "free";
   if (FREE_TICKET_IDS.has(ticketId)) return "trial";
   if (roomType === "reservation") return "reservation";
   return "paid";
@@ -55,9 +90,36 @@ export function visitRevenue(type: VisitType, ticketId: string, billedCoin: numb
   return Math.round((billedCoin + billedReward) * COIN_TO_YEN);
 }
 
-/** 有料判定。core.py: 有料=非trial（予約も有料に含む）。 */
+/** 有料判定。有料=無料枠（お試し・無料3種）以外。予約も有料に含む。 */
 export function isPaid(type: VisitType): boolean {
   return type !== "trial" && type !== "free";
+}
+
+/** 無料枠（お試し＋無料3種）か。 */
+export function isFree(type: VisitType): boolean {
+  return !isPaid(type);
+}
+
+/**
+ * 無料枠の内訳。有料なら null。
+ * entryType が未知の値（今後の追加施策など）のときは otherFree に寄せ、件数を落とさない。
+ */
+export function freeKindOf(type: VisitType, ticketId?: string | null, entryType?: string | null): FreeKind | null {
+  if (type === "trial") return "trial";
+  if (type !== "free") return null;
+  if (entryType === "freeTicket" || entryType === "newUserFree" || entryType === "freshMaidFree") return entryType;
+  if (!entryType && ticketId && FREE_ENTRY_TICKET_IDS.has(ticketId)) return "freeTicket";
+  return "otherFree";
+}
+
+/** 無料枠の内訳ごとの件数（重みなしの実件数）。 */
+export function countFreeKinds(visits: Array<Pick<Visit, "type" | "ticketId" | "entryType">>): Record<FreeKind, number> {
+  const counts = Object.fromEntries(FREE_KINDS.map((kind) => [kind, 0])) as Record<FreeKind, number>;
+  for (const visit of visits) {
+    const kind = freeKindOf(visit.type, visit.ticketId, visit.entryType);
+    if (kind) counts[kind] += 1;
+  }
+  return counts;
 }
 
 /**

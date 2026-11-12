@@ -69,6 +69,10 @@ export interface Visit {
   minutes?: number | null; // 滞在時間(分) = initialTime
   billedCoin?: number | null; // 消費コイン
   billedRewardPoint?: number | null; // 消費リワードポイント
+  // --- 2026-11 追加。これより前に同期した行では undefined ---
+  entryType?: string | null; // 無料ご帰宅の種類（freeTicket / newUserFree / freshMaidFree）
+  billedCoinVendor?: string | null; // 消費したコインの購入元（apple / google）
+  usedTicketCount?: number | null; // 1回のご帰宅で使ったチケット枚数（40分=2枚など）
 }
 
 // メイドへのアイテムプレゼント（userRecordPresents）。

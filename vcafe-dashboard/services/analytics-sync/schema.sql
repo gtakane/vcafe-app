@@ -219,6 +219,15 @@ ALTER TABLE `PROJECT_ID.DATASET_ID.visits_raw`
   ADD COLUMN IF NOT EXISTS billedCoin FLOAT64,
   ADD COLUMN IF NOT EXISTS billedRewardPoint FLOAT64;
 
+-- 2026-11-06 から始まった無料ご帰宅3種の判定と、売上を計上ロジックに合わせるための明細列。
+--   entryType        … freeTicket / newUserFree / freshMaidFree（有料・お試しは NULL）
+--   billedCoinVendor … 消費したコインの購入元（apple / google）。リワードポイント払いは NULL
+--   usedTicketCount  … 1回のご帰宅で使ったチケット枚数（40分=2枚など）
+ALTER TABLE `PROJECT_ID.DATASET_ID.visits_raw`
+  ADD COLUMN IF NOT EXISTS entryType STRING,
+  ADD COLUMN IF NOT EXISTS billedCoinVendor STRING,
+  ADD COLUMN IF NOT EXISTS usedTicketCount INT64;
+
 -- ============================================================================
 -- recordKey: 分析側の重複排除キー（Firestoreフルパスの HMAC）。
 -- collection group の document.id はグローバル一意ではないため、id を PARTITION キーに
