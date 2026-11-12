@@ -8,8 +8,9 @@ if ! bash "${SYNC_DIR}/check-bigquery-schema.sh" >/dev/null 2>&1; then
   echo "BigQuery の列がそろっていません。先に手順2を実行してください。"; exit 1
 fi
 
-PREV=$(gcloud run jobs describe $JOB --region=$R --project=$P --format='value(spec.template.template.containers[0].image)')
+PREV=$(current_job_image)
 IMG=$R-docker.pkg.dev/$P/cloud-run-source-deploy/$JOB:$(git rev-parse --short HEAD)
+[[ -n "${PREV}" ]] || { echo "現在のプログラム名を読み取れませんでした。この出力を貼ってください。"; exit 1; }
 echo "現在のプログラム: ${PREV}"
 echo "新しいプログラム: ${IMG}"
 confirm "同期ジョブのプログラムを差し替えます（ビルドに数分かかります）。"

@@ -14,3 +14,10 @@ confirm() {
   read -r -p "$1 よろしければ yes と入力してください: " answer
   if [[ "${answer}" != "yes" ]]; then echo "中止しました。何も変更していません。"; exit 1; fi
 }
+
+# 同期ジョブが現在使っているプログラム（コンテナイメージ）名。
+# gcloud の --format のフィールド指定は版によって階層が違うため、YAML から image 行を拾う。
+current_job_image() {
+  gcloud run jobs describe $JOB --region=$R --project=$P --format=yaml \
+    | awk '$1 == "image:" || $1 == "-" && $2 == "image:" { print $NF; exit }'
+}

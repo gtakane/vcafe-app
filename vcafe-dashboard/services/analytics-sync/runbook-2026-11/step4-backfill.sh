@@ -6,11 +6,13 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 FROM=2026-10-15
 TO=$(date -u -d tomorrow +%F)
 
-CURRENT=$(gcloud run jobs describe $JOB --region=$R --project=$P --format='value(spec.template.template.containers[0].image)')
-HEAD_SHA=$(git -C "${DASHBOARD_DIR}" rev-parse --short HEAD)
-if [[ "${CURRENT}" != *":${HEAD_SHA}" ]]; then
-  echo "同期ジョブがまだ新しいプログラムになっていません（現在: ${CURRENT}）。先に手順3を実行してください。"; exit 1
+# 同期ジョブのプログラムが、無料判定の変更（cc8f291）を含むコミットから作られているか確認する。
+CURRENT=$(current_job_image)
+TAG="${CURRENT##*:}"
+if [[ -z "${CURRENT}" ]] || ! git -C "${DASHBOARD_DIR}" merge-base --is-ancestor cc8f291 "${TAG}" 2>/dev/null; then
+  echo "同期ジョブがまだ新しいプログラムになっていません（現在: ${CURRENT:-読み取れず}）。先に手順3を実行してください。"; exit 1
 fi
+echo "同期ジョブのプログラム: ${CURRENT}"
 
 echo "取り込み期間: ${FROM} 〜 ${TO}（UTC・終了日は含まない）"
 confirm "毎時の定期同期を一時停止し、この期間を再取り込みします（10〜20分ほど）。終わったら自動で元に戻します。"
