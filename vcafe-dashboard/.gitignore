@@ -8,3 +8,8 @@ node_modules/
 .deploy-state/
 serviceAccountKey*.json
 *.tsbuildinfo
+
+# メイド↔Discord対応表（実IDを含む。公開リポジトリのため絶対にコミットしない）
+services/reservation-notify/maid-map.json
+# 誤って作られたgitの一時ファイル
+FETCH_HEAD
