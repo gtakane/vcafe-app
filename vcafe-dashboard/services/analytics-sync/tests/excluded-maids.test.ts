@@ -18,6 +18,9 @@ test("同期本体が全メイド系テーブルの挿入で除外を通して�
   const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
   for (const table of ["visits_raw", "cheki_raw", "shifts_raw", "presents_raw", "maid_profiles_raw", "maid_monthly_raw"]) {
     const line = source.split("\n").find((l) => l.includes(`insertRows("${table}"`));
-    assert.ok(line?.includes("withoutExcludedMaids"), `${table} の挿入でテスト用メイドを除外していない`);
+    // 挿入行で直接通すか、除外済みの変数（const x = withoutExcludedMaids(...)）を挿入していること。
+    const variable = line?.match(/insertRows\("[a-z_]+",\s*([A-Za-z]+)\.map\(/)?.[1];
+    const filteredVariable = variable != null && source.includes(`const ${variable} = withoutExcludedMaids(`);
+    assert.ok(line?.includes("withoutExcludedMaids") || filteredVariable, `${table} の挿入でテスト用メイドを除外していない`);
   }
 });

@@ -7,6 +7,11 @@
  *
  * 本番の件数にはテストユーザーの分が含まれ、ダッシュボード側は除外しているため、
  * 少しの差（既定: 5件または5%の大きい方まで）は正常とみなす。
+ *
+ * 差がそれを超えた日は取り込み直し、そのとき読んだ本番の記録から
+ * テストユーザー・テスト用メイド（EXCLUDED_MAID_IDS）の分を除いた件数（expected）と比べ直す。
+ * テストの多い日（例: 2026-11-06 の無料ご帰宅の公開日）を取りこぼしと誤判定しないため。
+ * メイドを特定できず取り込めなかった記録は expected に残す（ダッシュボードに出ていない実データのため）。
  */
 
 export interface DayCount { day: string; production: number; dashboard: number }
@@ -25,6 +30,25 @@ export function judgeDay(count: DayCount): CompletenessStatus {
   // 丸ごと欠けている、または2割以上欠けている日は重大
   if (count.dashboard === 0 || gap > count.production * 0.2) return "fail";
   return "warn";
+}
+
+/** 取り込み直したときに数えた、その日のご帰宅記録の内訳。 */
+export interface VisitBreakdown {
+  read: number; // 本番から読んだ件数
+  testUsers: number; // テストユーザーの分（除外）
+  testMaids: number; // テスト用メイドの分（除外）
+  unresolved: number; // メイドを特定できず取り込めなかった分（実データの欠け）
+  kept: number; // 取り込んだ件数
+}
+
+/** ダッシュボードに出るべき件数＝本番の件数からテストユーザー・テスト用メイドの分を除いたもの。 */
+export function expectedVisits(breakdown: VisitBreakdown): number {
+  return breakdown.read - breakdown.testUsers - breakdown.testMaids;
+}
+
+/** 取り込み直した日の判定。テストの分を除いた件数と比べる。 */
+export function judgeRepairedDay(day: string, breakdown: VisitBreakdown, dashboard: number): CompletenessStatus {
+  return judgeDay({ day, production: expectedVisits(breakdown), dashboard });
 }
 
 /** 営業日 D（JST 2:00〜翌2:00）を UTC の時刻範囲にする。 */

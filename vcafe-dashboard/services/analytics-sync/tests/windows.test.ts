@@ -101,3 +101,18 @@ test("取りこぼしの判定: テストユーザー分の小さな差は正常
   assert.deepEqual(recentBusinessDays(new Date("2026-11-12T01:00:00Z"), 7), ["2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11"]);
   assert.equal(businessDayRange("2026-10-20").start.toISOString(), "2026-10-19T17:00:00.000Z");
 });
+
+test("取り込み直した日は、テストユーザー・テスト用メイドの分を除いた件数と比べる（2026-11-06 の誤検知）", async () => {
+  const { judgeDay, judgeRepairedDay, expectedVisits } = await import("../src/completeness.ts");
+  // 11/06（無料ご帰宅の公開日）: 本番219件・ダッシュボード201件で、件数だけなら warn になっていた。
+  assert.equal(judgeDay({ day: "2026-11-06", production: 219, dashboard: 201 }), "warn");
+  const onlyTests = { read: 219, testUsers: 12, testMaids: 6, unresolved: 0, kept: 201 };
+  assert.equal(expectedVisits(onlyTests), 201);
+  assert.equal(judgeRepairedDay("2026-11-06", onlyTests, 201), "pass");
+  // メイドを特定できず取り込めなかった分は実データの欠けなので、除外せず warn のまま残す。
+  const unresolved = { read: 219, testUsers: 2, testMaids: 0, unresolved: 16, kept: 201 };
+  assert.equal(expectedVisits(unresolved), 217);
+  assert.equal(judgeRepairedDay("2026-11-06", unresolved, 201), "warn");
+  // 取り込み直しても入らない（ダッシュボードが0件）なら fail。
+  assert.equal(judgeRepairedDay("2026-11-06", onlyTests, 0), "fail");
+});

@@ -12,7 +12,7 @@ import { buildMaidDirectory, mapBooking, mapCheki, pseudonymizeCustomerId, recor
 import { rowInsertId } from "./row-insert-id.ts";
 import { excludedMaidIdsFrom, withoutExcludedMaids } from "./excluded-maids.ts";
 import { summarizeBalances, type UserBalanceSource, type UserItemSource } from "./balances.ts";
-import { allowedGap, businessDayRange, judgeDay, recentBusinessDays, type DayCount } from "./completeness.ts";
+import { allowedGap, businessDayRange, expectedVisits, judgeDay, judgeRepairedDay, recentBusinessDays, type DayCount, type VisitBreakdown } from "./completeness.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
 process.on("unhandledRejection", (error) => {
@@ -230,7 +230,7 @@ async function recordRejects(runId: string, entries: Array<{ source: string; rea
 }
 
 // 指定した [start, end) の24時間窓を1回分同期する。
-async function syncWindow(start: Date, end: Date, windowKind = "incremental"): Promise<{ degraded: Array<{ source: string; reasonCode: string; message: string }> }> {
+async function syncWindow(start: Date, end: Date, windowKind = "incremental"): Promise<{ degraded: Array<{ source: string; reasonCode: string; message: string }>; visits: VisitBreakdown }> {
   const startedAt = new Date().toISOString();
   // 必須ソース: 失敗したら窓ごと失敗させる（欠けたまま成功にしない）。
   const [visitsRead, chekiRead, shiftsRead, paymentsRead, purchaseRead] = await Promise.all([
@@ -288,7 +288,8 @@ async function syncWindow(start: Date, end: Date, windowKind = "incremental"): P
     mapSafely(documents, mapper, { source, secret: config.hmacSecret, onReject });
 
   const customersResult = safe(userDocuments, (d) => mapUser(d, config.hmacSecret), "users");
-  const visitsResult = safe(visitDocuments.filter((d) => !excludedUsers.has(d.parentId || "")), (d) => mapVisit(d, config.hmacSecret, maidMap), "userRecordVisits");
+  const visitDocumentsWithoutTestUsers = visitDocuments.filter((d) => !excludedUsers.has(d.parentId || ""));
+  const visitsResult = safe(visitDocumentsWithoutTestUsers, (d) => mapVisit(d, config.hmacSecret, maidMap), "userRecordVisits");
   const chekiResult = safe(chekiDocuments.filter((d) => !excludedUsers.has(d.parentId || "")), (d) => mapCheki(d, config.hmacSecret, maidMap, syncedAt), "userAlbum");
   const shiftsResult = safe(shiftDocuments, (d) => mapShift(d, maidMap, config.hmacSecret), "workshifts");
   const customers = customersResult.accepted;
@@ -317,6 +318,16 @@ async function syncWindow(start: Date, end: Date, windowKind = "incremental"): P
     { source: "users", ...customersResult },
   ], rejectThreshold);
 
+  const keptVisits = withoutExcludedMaids(visits, excludedMaids, (r) => r.maidId);
+  // 取りこぼし判定（completeness.ts）で、テストの分を除いた件数と比べるための内訳。
+  const visitBreakdown: VisitBreakdown = {
+    read: visitDocuments.length,
+    testUsers: visitDocuments.length - visitDocumentsWithoutTestUsers.length,
+    unresolved: visitDocumentsWithoutTestUsers.length - visits.length,
+    testMaids: visits.length - keptVisits.length,
+    kept: keptVisits.length,
+  };
+
   await Promise.all([
     // customers は取得済みの updateTime を捨てずに保持する（旧実装は null 固定だった）。
     insertRows("customers_raw", customers.map((row) => {
@@ -327,7 +338,7 @@ async function syncWindow(start: Date, end: Date, windowKind = "incremental"): P
         sourceUpdatedAt: source?.updatedAt ?? null,
       };
     })),
-    insertRows("visits_raw", withoutExcludedMaids(visits, excludedMaids, (r) => r.maidId).map((row) => ({ ...row, syncedAt, runId }))),
+    insertRows("visits_raw", keptVisits.map((row) => ({ ...row, syncedAt, runId }))),
     insertRows("cheki_raw", withoutExcludedMaids(cheki, excludedMaids, (r) => r.maidId).map((row) => ({ ...row, runId }))),
     insertRows("shifts_raw", withoutExcludedMaids(shifts, excludedMaids, (r) => r.maidId).map((row) => ({ ...row, syncedAt, runId }))),
     insertRows("payments_raw", payments.map((row) => ({ ...row, syncedAt, runId }))),
@@ -386,7 +397,7 @@ async function syncWindow(start: Date, end: Date, windowKind = "incremental"): P
     rejected: rejects,
   }));
 
-  return { degraded };
+  return { degraded, visits: visitBreakdown };
 }
 
 // maidWorkReport（メイド名簿＋月次実績）を全件スナップショット同期する。
@@ -507,21 +518,31 @@ async function checkCompleteness() {
   const before = await countDays(days);
   const problems = before.filter((c) => judgeDay(c) !== "pass");
   // 食い違った日だけを取り込み直す（本番は読み取りのみ。分析側は追記なので二重計上にはならない）。
+  const breakdowns = new Map<string, VisitBreakdown>();
   for (const problem of problems) {
     const { start, end } = businessDayRange(problem.day);
     console.warn(JSON.stringify({ completeness: { day: problem.day, production: problem.production, dashboard: problem.dashboard, action: "repair" } }));
-    try { await syncWindow(start, end, "repair"); } catch (error) { console.error(`COMPLETENESS_REPAIR_FAILED ${problem.day}: ${(error as Error).message}`); }
+    try {
+      const outcome = await syncWindow(start, end, "repair");
+      breakdowns.set(problem.day, outcome.visits);
+    } catch (error) { console.error(`COMPLETENESS_REPAIR_FAILED ${problem.day}: ${(error as Error).message}`); }
   }
   const after = problems.length ? await countDays(problems.map((p) => p.day)) : [];
   const checkedAt = new Date().toISOString();
   const rows = before.map((count) => {
     const repaired = after.find((a) => a.day === count.day);
     const final = repaired ?? count;
-    const status = judgeDay(final);
+    const breakdown = breakdowns.get(count.day);
+    // 取り込み直せた日は、テストユーザー・テスト用メイドの分を除いた件数と比べる。
+    const expected = breakdown ? expectedVisits(breakdown) : final.production;
+    const status = breakdown ? judgeRepairedDay(count.day, breakdown, final.dashboard) : judgeDay(final);
     return {
       runId, checkName: `visits_daily_completeness:${count.day}`, status,
-      observedValue: final.production - final.dashboard, threshold: allowedGap(final.production),
-      details: JSON.stringify({ day: count.day, production: final.production, dashboard: final.dashboard, repaired: Boolean(repaired), dashboardBefore: count.dashboard }),
+      observedValue: expected - final.dashboard, threshold: allowedGap(expected),
+      details: JSON.stringify({
+        day: count.day, production: final.production, dashboard: final.dashboard, repaired: Boolean(repaired), dashboardBefore: count.dashboard,
+        ...(breakdown ? { expected, testUsers: breakdown.testUsers, testMaids: breakdown.testMaids, unresolvedMaid: breakdown.unresolved } : {}),
+      }),
       checkedAt,
     };
   });

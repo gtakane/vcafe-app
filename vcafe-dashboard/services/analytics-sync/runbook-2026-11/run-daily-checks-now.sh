@@ -11,8 +11,13 @@ echo
 echo "=== 取りこぼしの判定結果（直近7営業日） ==="
 bq query --project_id=$P --use_legacy_sql=false --format=pretty '
 SELECT REPLACE(checkName, "visits_daily_completeness:", "") AS day, status,
-  JSON_VALUE(details, "$.production") AS production, JSON_VALUE(details, "$.dashboard") AS dashboard, JSON_VALUE(details, "$.repaired") AS repaired
+  JSON_VALUE(details, "$.production") AS production, JSON_VALUE(details, "$.dashboard") AS dashboard, JSON_VALUE(details, "$.repaired") AS repaired,
+  JSON_VALUE(details, "$.expected") AS expected_excl_test, JSON_VALUE(details, "$.testUsers") AS test_users,
+  JSON_VALUE(details, "$.testMaids") AS test_maids, JSON_VALUE(details, "$.unresolvedMaid") AS unresolved_maid
 FROM vcafe_analytics.dq_results
 WHERE STARTS_WITH(checkName, "visits_daily_completeness:")
   AND checkedAt = (SELECT MAX(checkedAt) FROM vcafe_analytics.dq_results WHERE STARTS_WITH(checkName, "visits_daily_completeness:"))
 ORDER BY day'
+echo "※ production は本番の全件（テストユーザー・テスト用メイドを含む）。取り込み直した日は"
+echo "   expected_excl_test（テストの分を除いた件数）と dashboard を比べて判定します。"
+echo "   unresolved_maid はメイドを特定できず取り込めなかった件数（実データの欠け）です。"
