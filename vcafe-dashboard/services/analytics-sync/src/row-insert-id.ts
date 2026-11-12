@@ -23,5 +23,14 @@ export function rowInsertId(row: object, fallbackTimestamp: string): string {
   if (r.rejectedAt != null && r.source != null && r.reasonCode != null) {
     return `${String(r.runId)}:${String(r.source)}:${String(r.reasonCode)}:${String(r.rejectedAt)}`;
   }
+  // dq_results の行（checkName, checkedAt を持つ）。2026-11-12 まで既定値に落ちて、
+  // 同じ実行の判定結果（7営業日分）が1件を残して捨てられていた。
+  if (r.checkName != null && r.checkedAt != null) {
+    return `${String(r.runId)}:${String(r.checkName)}:${String(r.checkedAt)}`;
+  }
+  // balance_snapshots の行（snapshotAt, source を持つ）。
+  if (r.snapshotAt != null && r.source != null) {
+    return `${String(r.runId)}:${String(r.source)}:${String(r.snapshotAt)}`;
+  }
   return `row:${String(r.sourceUpdatedAt || fallbackTimestamp)}`;
 }

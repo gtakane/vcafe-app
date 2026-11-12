@@ -50,3 +50,29 @@ test("いずれの識別子も無ければ row:タイムスタンプ にフォ�
   const id = rowInsertId({ foo: "bar" }, "2026-07-29T00:00:00Z");
   assert.equal(id, "row:2026-07-29T00:00:00Z");
 });
+
+test("dq_results の判定結果は日ごとに別の insertId になる（同じ実行の7日分が1件に潰れない）", () => {
+  const base = { runId: "run-1", status: "pass", checkedAt: "2026-11-12T06:40:00.000Z" };
+  const ids = ["2026-11-05", "2026-11-06", "2026-11-07"].map((day) => rowInsertId({ ...base, checkName: `visits_daily_completeness:${day}` }, "2026-11-12T06:40:00.000Z"));
+  assert.equal(new Set(ids).size, 3);
+});
+
+test("balance_snapshots の行は既定値に落ちない", () => {
+  const id = rowInsertId({ runId: "run-1", source: "sync", snapshotAt: "2026-11-12T06:40:00.000Z" }, "x");
+  assert.ok(!id.startsWith("row:"));
+});
+
+test("insertId を作る項目を持たない行は、挿入先のテーブルに存在しない（既定値への落下を防ぐ）", async () => {
+  // 同期ジョブが書き込むテーブルごとの代表的な行。新しいテーブルを足したらここにも足すこと。
+  const samples: Record<string, object> = {
+    dq_results: { runId: "r", checkName: "c", checkedAt: "t" },
+    balance_snapshots: { runId: "r", source: "sync", snapshotAt: "t" },
+    sync_runs: { runId: "r", source: "s", windowStart: "a", windowEnd: "b" },
+    sync_rejects: { runId: "r", source: "s", reasonCode: "x", rejectedAt: "t" },
+    bookings_raw: { recordKey: "k" },
+    maid_monthly_raw: { maidId: "m", month: "202611" },
+  };
+  for (const [table, row] of Object.entries(samples)) {
+    assert.ok(!rowInsertId(row, "fallback").startsWith("row:"), `${table} が既定の insertId に落ちる`);
+  }
+});
