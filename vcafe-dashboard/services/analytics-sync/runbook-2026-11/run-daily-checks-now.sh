@@ -13,5 +13,6 @@ bq query --project_id=$P --use_legacy_sql=false --format=pretty '
 SELECT REPLACE(checkName, "visits_daily_completeness:", "") AS day, status,
   JSON_VALUE(details, "$.production") AS production, JSON_VALUE(details, "$.dashboard") AS dashboard, JSON_VALUE(details, "$.repaired") AS repaired
 FROM vcafe_analytics.dq_results
-WHERE STARTS_WITH(checkName, "visits_daily_completeness:") AND checkedAt > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
+WHERE STARTS_WITH(checkName, "visits_daily_completeness:")
+  AND checkedAt = (SELECT MAX(checkedAt) FROM vcafe_analytics.dq_results WHERE STARTS_WITH(checkName, "visits_daily_completeness:"))
 ORDER BY day'
