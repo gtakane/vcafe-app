@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# 課金台帳の購入額を、各プラットフォームの報告と比べる（読み取りのみ）
+#   bash verify-purchases.sh 2026-10
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+MONTH=${1:-2026-10}
+START="${MONTH}-01"; END=$(date -d "${START} +1 month -1 day" +%F)
+bq query --project_id=$P --use_legacy_sql=false --format=pretty --parameter="s:DATE:${START}" --parameter="e:DATE:${END}" '
+SELECT "日本時間の月" AS basis,
+  ROUND(SUM(IF(vendor = "apple", amount, 0)) * 0.85) AS apple_net, ROUND(SUM(IF(vendor = "google", amount, 0)) * 0.85) AS google_net,
+  SUM(IF(channel = "webstore", amount, 0)) AS stripe, COUNTIF(channel = "webstore") AS stripe_n, SUM(IF(channel = "inapp" AND vendor IS NULL, amount, 0)) AS inapp_unknown
+FROM vcafe_analytics.payments_current_range(DATE_SUB(@s, INTERVAL 1 DAY), DATE_ADD(@e, INTERVAL 1 DAY))
+WHERE DATE(`at`, "Asia/Tokyo") BETWEEN @s AND @e
+UNION ALL
+SELECT "UTCの月",
+  ROUND(SUM(IF(vendor = "apple", amount, 0)) * 0.85), ROUND(SUM(IF(vendor = "google", amount, 0)) * 0.85),
+  SUM(IF(channel = "webstore", amount, 0)), COUNTIF(channel = "webstore"), SUM(IF(channel = "inapp" AND vendor IS NULL, amount, 0))
+FROM vcafe_analytics.payments_current_range(DATE_SUB(@s, INTERVAL 1 DAY), DATE_ADD(@e, INTERVAL 1 DAY))
+WHERE DATE(`at`) BETWEEN @s AND @e'
+if [[ "${MONTH}" == "2026-10" ]]; then
+  echo "各社の報告（2026年10月）: Apple 673,183（手数料控除後） / Google 188,615（手数料控除後） / Stripe 964件 2,605,010"
+fi

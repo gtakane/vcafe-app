@@ -1,6 +1,8 @@
 import { businessDateJst, isPaid, shiftActualHours } from "./metrics.ts";
 import { mockAnalyticsData, customers as mockCustomers } from "./mock-data.ts";
 import type { Visit } from "./types";
+import { computeInsights, COHORT_MONTHS, loadGrowthInsights, monthsBack, type GrowthInsights } from "./growth-insights.ts";
+import { loadBalances, type BalancesResult } from "./balances.ts";
 
 // 座席モデルの定数は lib/metrics.ts（共通ロジックの正典）へ移動。
 // 既存の参照を壊さないよう再エクスポートしつつ、本ファイル内でも使う。
@@ -42,6 +44,12 @@ export interface GrowthMetrics {
   capacitySlots: number; // 最大利用可能ユーザー枠 = 合計お給仕時間 × 9
   occupancyRate: number; // 占有率 0〜1
   vacancyRate: number; // 空席率 0〜1
+  // 施策・課金の指標（lib/growth-insights.ts）。取得に失敗しても他の指標は表示する。
+  insights?: GrowthInsights | null;
+  insightsError?: string;
+  // 未使用残高（前受金）と月の確定売上（lib/balances.ts）。
+  balances?: BalancesResult | null;
+  balancesError?: string;
 }
 
 export interface GrowthRegistration {
@@ -203,7 +211,15 @@ function computeGrowthFromMock(start: string, end: string): GrowthMetrics {
   const registrations: GrowthRegistration[] = mockCustomers.map((c) => ({ id: c.id, registeredAt: c.registeredAt }));
   const visits: GrowthVisitRow[] = mockAnalyticsData.visits.map((v) => ({ customerId: v.customerId, maidId: v.maidId, at: v.at, type: v.type, weight: v.weight }));
   const shifts: GrowthShiftRow[] = mockAnalyticsData.shifts.map((s) => ({ maidId: s.maidId, scheduledStart: s.scheduledStart, scheduledEnd: s.scheduledEnd, actualStart: s.actualStart, actualEnd: s.actualEnd }));
-  return computeGrowth(start, end, registrations, visits, shifts);
+  const growth = computeGrowth(start, end, registrations, visits, shifts);
+  // モックでも画面を確認できるよう、同じ計算でデモ用の施策指標を作る。
+  growth.insights = computeInsights({
+    range: { start, end }, now: new Date(`${end}T15:00:00Z`), registrations,
+    payments: mockCustomers.filter((c) => c.lastPaymentAt).map((c) => ({ customerId: c.id, at: c.lastPaymentAt!, amount: c.paymentAmount || 0 })),
+    visits: mockAnalyticsData.visits.map((v) => ({ customerId: v.customerId, maidId: v.maidId, at: v.at, type: v.type, entryType: v.entryType })),
+    usage: [],
+  });
+  return growth;
 }
 
 export async function loadGrowthData(query: { start: string; end: string }): Promise<GrowthMetrics> {
@@ -241,5 +257,20 @@ export async function loadGrowthData(query: { start: string; end: string }): Pro
   const registrations: GrowthRegistration[] = regRows.map((r) => ({ id: String(r.id), registeredAt: tsIso(r.registeredAt) }));
   const visits: GrowthVisitRow[] = visitRows.map((r) => ({ customerId: String(r.customerId), maidId: String(r.maidId), at: tsIso(r.at) ?? "", type: String(r.type) as Visit["type"], weight: Number(r.weight ?? 1) || 1 })).filter((v) => v.at);
   const shifts: GrowthShiftRow[] = shiftRows.map((r) => ({ maidId: String(r.maidId), scheduledStart: tsIso(r.scheduledStart) ?? "", scheduledEnd: tsIso(r.scheduledEnd) ?? "", actualStart: tsIso(r.actualStart), actualEnd: tsIso(r.actualEnd) })).filter((s) => s.scheduledStart && s.scheduledEnd);
-  return computeGrowth(start, end, registrations, visits, shifts);
+  const growth = computeGrowth(start, end, registrations, visits, shifts);
+  try {
+    growth.insights = await loadGrowthInsights({ start, end });
+  } catch (error) {
+    console.error("施策・課金の指標の取得に失敗しました", error);
+    growth.insights = null;
+    growth.insightsError = "施策・課金の指標を取得できませんでした";
+  }
+  try {
+    growth.balances = await loadBalances(monthsBack(end.slice(0, 7), COHORT_MONTHS));
+  } catch (error) {
+    console.error("未使用残高の取得に失敗しました", error);
+    growth.balances = null;
+    growth.balancesError = "未使用残高を取得できませんでした（残高の記録が未作成の可能性があります）";
+  }
+  return growth;
 }

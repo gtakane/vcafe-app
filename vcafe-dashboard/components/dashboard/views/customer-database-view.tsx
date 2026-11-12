@@ -14,7 +14,7 @@ import VisitLogPanel from "../visit-log/panel";
 
 const ROW_HEIGHT = 46; // 1行の高さ(px)。表示中の行だけを描画する（数千行でもスクロールが重くならない）
 const OVERSCAN = 12;
-const DEFAULT_COLUMNS = ["name", "rank", "gender", "birthYear", "registeredAt", "lastVisitAt", "totalVisitAmount", "maxConsecutiveVisitDays", "paymentCount", "paymentAmount", "lastPaymentAt", "purchasedItemQuantity", "purchasedItemCoin", "lastPurchasedItemAt", "presentAmount", "lastPresentAt", "coin", "rewardPoint"];
+const DEFAULT_COLUMNS = ["name", "rank", "gender", "birthYear", "registeredAt", "lastVisitAt", "totalVisitAmount", "maxConsecutiveVisitDays", "paymentCount", "paymentAmount", "lastPaymentAt", "purchasedItemQuantity", "purchasedItemCoin", "lastPurchasedItemAt", "presentAmount", "lastPresentAt", "coinApple", "coinGoogle", "rewardPoint"];
 const COLUMN_STORAGE_KEY = "vcafe.userdb.columns";
 
 const FORMAT = { number: (n: number) => number.format(n), yen: (n: number) => yen.format(n), date: (iso: string) => jstDate(iso), gender: (g: string) => genderLabel(g) };
@@ -209,7 +209,7 @@ function CustomerDetail({ customer, onClose }: { customer: Customer; onClose: ()
     ["最終課金日", customer.lastPaymentAt ? jstDate(customer.lastPaymentAt) : "—"],
     ["アイテム購入", customer.purchasedItemQuantity ? `${number.format(customer.purchasedItemQuantity)}点 / ${number.format(customer.purchasedItemCoin || 0)}コイン` : "—"],
     ["プレゼント", customer.presentAmount ? `${number.format(customer.presentAmount)}回` : "—"],
-    ["残高", `${number.format(customer.coin || 0)}コイン / ${number.format(customer.rewardPoint || 0)}RP`],
+    ["残高", `Apple ${number.format(customer.coinApple || 0)} / Google ${number.format(customer.coinGoogle || 0)}コイン / ${number.format(customer.rewardPoint || 0)}RP`],
   ];
   return <section className="panel table-panel detail-panel">
     <div className="panel-head">

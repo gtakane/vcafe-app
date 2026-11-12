@@ -67,7 +67,10 @@ export function mapFirestoreUser(documentId: string, source: Record<string, unkn
     purchasedItemRewardPoint: numberOrNull(source.purchasedItemAmountRewardPoint),
     purchasedItemQuantity: numberOrNull(source.purchasedItemTotalQuantity),
     presentAmount: numberOrNull(source.presentAmount),
+    // coin は旧SBペイメント経由の残高（現在はほぼ0）。アプリ内で購入したコインは coinApple / coinGoogle。
     coin: numberOrNull(source.coin),
+    coinApple: numberOrNull(source.coinApple),
+    coinGoogle: numberOrNull(source.coinGoogle),
     rewardPoint: numberOrNull(source.rewardPoint),
     totalVisitAmount: numberOrNull(source.visitAmount),
     consecutiveVisitDays: numberOrNull(source.consecutiveVisitDays),

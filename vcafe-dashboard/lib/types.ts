@@ -32,7 +32,9 @@ export interface Customer {
   purchasedItemRewardPoint?: number | null; // アイテム購入額（リワードP）
   purchasedItemQuantity?: number | null; // アイテム購入数
   presentAmount?: number | null; // プレゼント（アイテム使用）回数
-  coin?: number | null; // コイン残高
+  coin?: number | null; // 旧コイン残高（SBペイメント経由。現在はほぼ0）
+  coinApple?: number | null; // Appleで購入したコインの残高
+  coinGoogle?: number | null; // Googleで購入したコインの残高
   rewardPoint?: number | null; // リワードポイント残高
   totalVisitAmount?: number | null; // 累計ご帰宅数（本番集計値）
   consecutiveVisitDays?: number | null;

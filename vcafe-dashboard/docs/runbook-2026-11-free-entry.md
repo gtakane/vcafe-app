@@ -112,3 +112,21 @@ cd ~/vcafe-app && git pull --ff-only
 | 6 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/promote-latest-canary.sh`（版の名前を写さずに切替） |
 
 > 手順1を飛ばして手順2以降を行うと、同期は起動時の列照合で停止し、ダッシュボードは表示時にエラーになる。
+
+## 第4段階・第2段階後半: グロース指標と、未使用残高・月の確定売上
+
+追加する指標（グロース指標の画面）:
+新規登録数と14日以内の初回課金率／新規ユーザー無料からの有料化率／新人メイド無料からの有料再訪率／
+月ごとの課金者数・1人あたり課金額・有料利用者数・1人あたり利用額／登録月ごとの課金継続率／未使用残高（前受金）の推移。
+
+月の確定売上（概要画面）は経理と同じ「購入額＋前月末の未使用残高−当月末の未使用残高」。
+未使用残高は毎日朝5時に全会員の合計を `balance_snapshots` へ1行記録する（個人単位では保存しない）。
+11/1時点は経理の書き出しを基準値として登録するため、11月分は12/1朝の記録後に確定する。
+
+| 手順 | コマンド |
+| --- | --- |
+| 1 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step8-balances.sh` |
+| 2 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step3-update-job-image.sh` |
+| 3 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step4-backfill.sh 2026-10-01`（課金の購入元・全会員の残高・最初の残高記録） |
+| 4 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/verify-purchases.sh 2026-10`（課金台帳と各社の報告の比較） |
+| 5 | `bash ~/vcafe-app/vcafe-dashboard/deploy-revision-tokyo.sh` → 検証用URLで確認 → `promote-latest-canary.sh` |

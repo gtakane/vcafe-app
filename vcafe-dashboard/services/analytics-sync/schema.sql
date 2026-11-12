@@ -106,6 +106,28 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.bookings_raw` (
 PARTITION BY DATE(`at`)
 CLUSTER BY maidId, customerId;
 
+-- 未使用残高（前受金）の記録（2026-11追加）。全会員（テストユーザー除く）の合計を1日1回記録する。
+-- 経理の売上計上「購入額＋前月末残高−当月末残高」の残高にあたる。個人単位では保存しない。
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.balance_snapshots` (
+  snapshotAt TIMESTAMP NOT NULL,
+  source STRING NOT NULL,
+  users INT64,
+  excludedTestUsers INT64,
+  appleCoin FLOAT64,
+  googleCoin FLOAT64,
+  legacyCoin FLOAT64,
+  rewardPoint FLOAT64,
+  ticketGokitaku FLOAT64,
+  ticketPremium FLOAT64,
+  ticketRandom FLOAT64,
+  ticketCheki FLOAT64,
+  ticketChekiFree FLOAT64,
+  ticketOther FLOAT64,
+  runId STRING,
+  syncedAt TIMESTAMP NOT NULL
+)
+PARTITION BY DATE(snapshotAt);
+
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.shifts_raw` (
   id STRING NOT NULL,
   maidId STRING NOT NULL,
@@ -242,6 +264,14 @@ ALTER TABLE `PROJECT_ID.DATASET_ID.visits_raw`
   ADD COLUMN IF NOT EXISTS minutes FLOAT64,
   ADD COLUMN IF NOT EXISTS billedCoin FLOAT64,
   ADD COLUMN IF NOT EXISTS billedRewardPoint FLOAT64;
+
+-- 会員のアプリ内コイン残高（Apple/Google別）と、課金台帳の購入元（2026-11追加）。
+ALTER TABLE `PROJECT_ID.DATASET_ID.customers_raw`
+  ADD COLUMN IF NOT EXISTS coinApple FLOAT64,
+  ADD COLUMN IF NOT EXISTS coinGoogle FLOAT64;
+
+ALTER TABLE `PROJECT_ID.DATASET_ID.payments_raw`
+  ADD COLUMN IF NOT EXISTS vendor STRING;
 
 -- 誕生日プレゼント等の無料チェキを売上から除くため、userAlbum.type を保持する（2026-11追加）。
 ALTER TABLE `PROJECT_ID.DATASET_ID.cheki_raw`

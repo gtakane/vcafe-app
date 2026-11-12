@@ -24,6 +24,8 @@
       "totalVisitAmount": "FLOAT64",
       "consecutiveVisitDays": "FLOAT64",
       "maxConsecutiveVisitDays": "FLOAT64",
+      "coinApple": "FLOAT64",
+      "coinGoogle": "FLOAT64",
       "recordKey": "STRING",
       "runId": "STRING"
     },
@@ -38,6 +40,7 @@
       "status": "STRING",
       "syncedAt": "TIMESTAMP",
       "source": "STRING",
+      "vendor": "STRING",
       "recordKey": "STRING",
       "runId": "STRING",
       "sourceUpdatedAt": "TIMESTAMP"
@@ -105,6 +108,24 @@
       "runId": "STRING",
       "syncedAt": "TIMESTAMP",
       "sourceUpdatedAt": "TIMESTAMP"
+    },
+    "balance_snapshots": {
+      "snapshotAt": "TIMESTAMP",
+      "source": "STRING",
+      "users": "INT64",
+      "excludedTestUsers": "INT64",
+      "appleCoin": "FLOAT64",
+      "googleCoin": "FLOAT64",
+      "legacyCoin": "FLOAT64",
+      "rewardPoint": "FLOAT64",
+      "ticketGokitaku": "FLOAT64",
+      "ticketPremium": "FLOAT64",
+      "ticketRandom": "FLOAT64",
+      "ticketCheki": "FLOAT64",
+      "ticketChekiFree": "FLOAT64",
+      "ticketOther": "FLOAT64",
+      "runId": "STRING",
+      "syncedAt": "TIMESTAMP"
     },
     "shifts_raw": {
       "id": "STRING",

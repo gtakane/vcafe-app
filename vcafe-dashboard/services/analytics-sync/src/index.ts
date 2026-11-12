@@ -11,6 +11,7 @@ import { looksLikeMissingColumn, summarizeInsertErrors } from "./insert-errors.t
 import { buildMaidDirectory, mapBooking, mapCheki, pseudonymizeCustomerId, recordKeyOf, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
 import { rowInsertId } from "./row-insert-id.ts";
 import { excludedMaidIdsFrom, withoutExcludedMaids } from "./excluded-maids.ts";
+import { summarizeBalances, type UserBalanceSource, type UserItemSource } from "./balances.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
 process.on("unhandledRejection", (error) => {
@@ -441,6 +442,46 @@ async function syncBookings() {
   console.info(JSON.stringify({ bookings: { reservations: reservations.length, invitations: invitations.length, inserted: kept.length, excludedTestUsers: excludedUsers.size } }));
 }
 
+// 未使用残高（前受金）を記録する。全会員の残高と、userItems のチケット所持枚数を読み、合計だけを1行保存する。
+// 月初（JST 1日の朝）の記録が、経理の「前月末の未使用残高」にあたる。
+async function syncBalances() {
+  const users: UserBalanceSource[] = [];
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+  for (;;) {
+    let query = sourceDb.collection("users").select("coinApple", "coinGoogle", "coin", "rewardPoint", "testUser", "testUesrFlag").orderBy(FieldPath.documentId()).limit(1000);
+    if (cursor) query = query.startAfter(cursor);
+    const snapshot = await query.get();
+    for (const document of snapshot.docs) users.push({ id: document.id, data: document.data() });
+    if (snapshot.size < 1000) break;
+    cursor = snapshot.docs[snapshot.docs.length - 1];
+  }
+  const items: UserItemSource[] = [];
+  let itemCursor: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+  for (;;) {
+    let query = sourceDb.collectionGroup("userItems").select("category", "itemName", "variationName", "quantity").orderBy(FieldPath.documentId()).limit(5000);
+    if (itemCursor) query = query.startAfter(itemCursor);
+    const snapshot = await query.get();
+    for (const document of snapshot.docs) {
+      const userId = document.ref.parent.parent?.id;
+      if (userId && document.ref.parent.parent?.parent?.id === "users") items.push({ userId, data: document.data() });
+    }
+    if (snapshot.size < 5000) break;
+    itemCursor = snapshot.docs[snapshot.docs.length - 1];
+  }
+  const totals = summarizeBalances(users, items);
+  await insertRows("balance_snapshots", [{ snapshotAt: new Date().toISOString(), source: "sync", ...totals, runId, syncedAt }]);
+  console.info(JSON.stringify({ balances: { ...totals, itemsRead: items.length } }));
+}
+
+function shouldSyncBalances(): boolean {
+  const mode = (process.env.BALANCES || "").trim().toLowerCase();
+  if (mode === "never") return false;
+  if (mode === "always") return true;
+  const hour = Number(process.env.BALANCES_HOUR_JST ?? 5);
+  const jstHour = new Date(Date.now() + 9 * 3600000).getUTCHours();
+  return Number.isInteger(hour) ? jstHour === hour : true;
+}
+
 // 予約・招待の取り込み頻度。既定は1日1回（BOOKINGS_HOUR_JST、既定5時）。
 //   BOOKINGS=always … 毎回取り込む（初回・確認時）
 //   BOOKINGS=never  … 取り込まない
@@ -503,6 +544,12 @@ if (shouldSyncMaidReports()) {
   await syncMaidReports();
 } else {
   console.info("MAID_REPORTS_SKIPPED 本番の読み取り負荷を抑えるため今回は月次レポートを同期しません");
+}
+
+if (shouldSyncBalances()) {
+  await syncBalances();
+} else {
+  console.info("BALANCES_SKIPPED 未使用残高は1日1回（BALANCES_HOUR_JST）のみ記録します");
 }
 
 if (shouldSyncBookings()) {

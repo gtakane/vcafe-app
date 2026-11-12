@@ -41,7 +41,9 @@ export const CUSTOMER_FIELDS: CustomerField[] = [
   { key: "lastPurchasedItemAt", label: "最終アイテム購入日", kind: "date" },
   { key: "presentAmount", label: "プレゼント回数", kind: "number" },
   { key: "lastPresentAt", label: "最終プレゼント日", kind: "date" },
-  { key: "coin", label: "コイン残高", kind: "number" },
+  { key: "coinApple", label: "Appleコイン残高", kind: "number" },
+  { key: "coinGoogle", label: "Googleコイン残高", kind: "number" },
+  { key: "coin", label: "旧コイン残高", kind: "number" },
   { key: "rewardPoint", label: "リワードP残高", kind: "number" },
 ];
 

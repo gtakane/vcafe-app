@@ -242,3 +242,28 @@ test("mapBooking: 予約は予約日時に、消費コイン×1.19円＋リワ�
   assert.equal(inv?.revenue, 1190);
   assert.notEqual(inv?.recordKey, r?.recordKey);
 });
+
+test("未使用残高: テストユーザーを除き、チケットは経理シートと同じ名前で分類して枚数を合計する", async () => {
+  const { summarizeBalances, ticketKind } = await import("../src/balances.ts");
+  assert.equal(ticketKind("記念撮影チケット", "1枚"), "ticketCheki");
+  assert.equal(ticketKind("記念撮影チケット", "新規登録プレゼント"), "ticketChekiFree");
+  assert.equal(ticketKind("プレミアムご帰宅チケット", "プレミアムご帰宅チケット"), "ticketPremium");
+  const totals = summarizeBalances(
+    [
+      { id: "u1", data: { coinApple: 100, coinGoogle: 0, rewardPoint: 500 } },
+      { id: "u2", data: { coinGoogle: 30, rewardPoint: "20" } },
+      { id: "t1", data: { coinApple: 9999, rewardPoint: 9999, testUser: true } },
+    ],
+    [
+      { userId: "u1", data: { category: "ticket", itemName: "ご帰宅チケット", variationName: "ご帰宅チケット", quantity: 3 } },
+      { userId: "u1", data: { category: "ticket", itemName: "プレミアムご帰宅チケット", variationName: "プレミアムご帰宅チケット", quantity: 0 } },
+      { userId: "u2", data: { category: "ticket", itemName: "記念撮影チケット", variationName: "新規登録プレゼント", quantity: 1 } },
+      { userId: "u2", data: { category: "head", itemName: "ねこみみ", quantity: 1 } },
+      { userId: "t1", data: { category: "ticket", itemName: "ご帰宅チケット", variationName: "ご帰宅チケット", quantity: 50 } },
+    ],
+  );
+  assert.deepEqual(totals, {
+    users: 2, excludedTestUsers: 1, appleCoin: 100, googleCoin: 30, legacyCoin: 0, rewardPoint: 520,
+    ticketGokitaku: 3, ticketPremium: 0, ticketRandom: 0, ticketCheki: 0, ticketChekiFree: 1, ticketOther: 0,
+  });
+});

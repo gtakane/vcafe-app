@@ -33,7 +33,19 @@ export default function OverviewView({ viewer, totals, growth, growthError, tren
           ["記念撮影（有料）", totals.revenueParts.cheki],
           ...(totals.revenueParts.other ? [["その他（明細の無い古い記録）", totals.revenueParts.other]] : []),
         ] as Array<[string, number]>).map(([label, amount]) => <div key={label}><span>{label}</span><strong>{yen.format(amount)}</strong><i><em style={{ width: `${totals.revenue ? Math.max(0, amount) / totals.revenue * 100 : 0}%` }}/></i></div>)}</div><p className="eyebrow" style={{ marginTop: 12 }}>うち予約・招待 {yen.format(totals.revenueParts.bookings)}／Stripe側（リワードポイント＋チケット＋記念撮影） {yen.format(totals.revenueParts.rewardPoint + totals.revenueParts.ticket + totals.revenueParts.cheki)}</p></section>}
+        {viewer.role === "admin" && <ConfirmedRevenue growth={growth} />}
         {totals.free > 0 && <section className="panel"><div className="panel-head"><div><p className="eyebrow">FREE VISITS</p><h2>無料枠の内訳</h2></div><span className="badge">合計 {number.format(totals.free)}件</span></div><div className="rank-mix">{FREE_KINDS.filter((kind) => kind !== "otherFree" || totals.freeKinds.otherFree > 0).map((kind) => { const count = totals.freeKinds[kind]; return <div key={kind}><span>{FREE_KIND_LABELS[kind]}</span><strong>{number.format(count)}<small>件</small></strong><i><em style={{ width: `${totals.free ? count / totals.free * 100 : 0}%` }}/></i></div>; })}</div></section>}
         <section className="grid-2"><article className="panel"><div className="panel-head"><div><p className="eyebrow">PERFORMANCE TREND</p><h2>ご帰宅数の推移</h2></div><span className="badge">{granularity === "hour" ? "時間別" : granularity === "day" ? "日次" : granularity === "week" ? "週次" : "月次"}</span></div><LineChart points={trend}/></article><article className="panel"><div className="panel-head"><div><p className="eyebrow">CUSTOMER MIX</p><h2>ユーザーランク構成</h2></div></div><div className="rank-mix">{visibleRanks.map((rank)=>{const count=customerStats.filter((u)=>u.rank===rank).length;return <div key={rank}><span>{rank}</span><strong>{count}<small>名</small></strong><i><em style={{width:`${customerStats.length?count/customerStats.length*100:0}%`}}/></i></div>})}</div></article></section>
   </>;
+}
+
+// 月の確定売上（経理と同じ「購入額＋前月末残高−当月末残高」）。残高の記録がそろった月だけ表示する。
+function ConfirmedRevenue({ growth }: { growth: GrowthMetrics | null }) {
+  const months = growth?.balances?.months.filter((m) => m.status !== "missing") ?? [];
+  return <section className="panel table-panel">
+    <div className="panel-head"><div><p className="eyebrow">CONFIRMED MONTHLY REVENUE</p><h2>月の確定売上（経理と同じ計算・税込）</h2><small>購入額（Apple/Googleは手数料15%控除後、Stripeは総額）＋前月末の未使用残高−当月末の未使用残高</small></div></div>
+    {!months.length ? <p className="muted" style={{ padding: "0 20px 16px" }}>{growth?.balancesError || "残高の記録がそろった月から表示します。11月分は、12月1日朝の記録後に確定します（11月1日時点の残高は経理の書き出しを基準値として使います）。"}</p> :
+    <div className="table-scroll"><table className="freeze-head"><thead><tr><th>月</th><th style={{ textAlign: "right" }}>Apple</th><th style={{ textAlign: "right" }}>Google</th><th style={{ textAlign: "right" }}>Stripe</th><th style={{ textAlign: "right" }}>合計（税込）</th><th style={{ textAlign: "right" }}>税抜</th><th>状態</th></tr></thead>
+      <tbody>{months.map((m) => <tr key={m.month}><td>{m.month}</td><td style={{ textAlign: "right" }}>{yen.format(m.revenue?.apple ?? 0)}</td><td style={{ textAlign: "right" }}>{yen.format(m.revenue?.google ?? 0)}</td><td style={{ textAlign: "right" }}>{yen.format(m.revenue?.stripe ?? 0)}</td><td style={{ textAlign: "right" }}><b>{yen.format(m.revenue?.total ?? 0)}</b></td><td style={{ textAlign: "right" }}>{yen.format(m.revenueExcludingTax ?? 0)}</td><td>{m.status === "confirmed" ? "確定" : "暫定"}{m.note ? `（${m.note}）` : ""}</td></tr>)}</tbody></table></div>}
+  </section>;
 }

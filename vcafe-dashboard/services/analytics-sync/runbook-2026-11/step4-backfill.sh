@@ -15,8 +15,8 @@ TAG="${CURRENT##*:}"
 if [[ -z "${CURRENT}" ]] || ! git -C "${DASHBOARD_DIR}" merge-base --is-ancestor cc8f291 "${TAG}" 2>/dev/null; then
   echo "同期ジョブがまだ新しいプログラムになっていません（現在: ${CURRENT:-読み取れず}）。先に手順3を実行してください。"; exit 1
 fi
-if ! git -C "${DASHBOARD_DIR}" grep -q "mapBooking" "${TAG}" -- services/analytics-sync/src/transform.ts 2>/dev/null; then
-  echo "同期ジョブのプログラムが売上の作り直し（予約・招待の取り込み）に対応していません（現在: ${CURRENT}）。"
+if ! git -C "${DASHBOARD_DIR}" grep -q "syncBalances" "${TAG}" -- services/analytics-sync/src/index.ts 2>/dev/null; then
+  echo "同期ジョブのプログラムが最新ではありません（現在: ${CURRENT}）。"
   echo "先に手順3をもう一度実行してください:  bash ${HERE}/step3-update-job-image.sh"; exit 1
 fi
 echo "同期ジョブのプログラム: ${CURRENT}"
@@ -30,7 +30,7 @@ cleanup() {
   echo
   if [[ ${UPDATED} == 1 ]]; then
     echo "# 再取り込み用の設定を外します"
-    gcloud run jobs update $JOB --region=$R --project=$P --remove-env-vars=BACKFILL_FROM,BACKFILL_TO,BOOKINGS \
+    gcloud run jobs update $JOB --region=$R --project=$P --remove-env-vars=BACKFILL_FROM,BACKFILL_TO,BOOKINGS,BALANCES,SYNC_ALL_USERS \
       || echo "!!! 設定を外せませんでした。この出力を貼ってください（このままだと毎時同じ期間を読み直します）"
   fi
   if [[ ${PAUSED} == 1 ]]; then
@@ -63,8 +63,9 @@ for range in "${RANGES[@]}"; do
   echo
   echo "# [${i}/${#RANGES[@]}] ${1} 〜 ${2}"
   EXTRA=""
-  if [[ ${i} == 1 ]]; then EXTRA=",BOOKINGS=always"; fi # 予約・招待は全件スナップショットなので1回だけ
+  # 予約・招待、未使用残高、全会員の属性は全件の読み直しなので、最初の区間で1回だけ行う
+  if [[ ${i} == 1 ]]; then EXTRA=",BOOKINGS=always,BALANCES=always,SYNC_ALL_USERS=true"; fi
   gcloud run jobs update $JOB --region=$R --project=$P --update-env-vars="BACKFILL_FROM=${1},BACKFILL_TO=${2}${EXTRA}" >/dev/null; UPDATED=1
   gcloud run jobs execute $JOB --region=$R --project=$P --wait
-  if [[ ${i} == 1 ]]; then gcloud run jobs update $JOB --region=$R --project=$P --remove-env-vars=BOOKINGS >/dev/null; fi
+  if [[ ${i} == 1 ]]; then gcloud run jobs update $JOB --region=$R --project=$P --remove-env-vars=BOOKINGS,BALANCES,SYNC_ALL_USERS >/dev/null; fi
 done

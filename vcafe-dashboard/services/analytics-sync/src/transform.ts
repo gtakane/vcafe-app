@@ -236,6 +236,7 @@ export interface PaymentRowOut {
   amount: number;
   coin: number;
   channel: string;
+  vendor?: string | null;
   productId: string;
   status: string;
   // 取り込み元コレクション。userPayments が全時代の台帳（正）で、
@@ -310,6 +311,8 @@ export function mapUserPayment(document: SourceDocument, secret: string): Paymen
     amount,
     coin,
     channel: document.data.coinVendor ? "inapp" : "webstore",
+    // アプリ内課金の購入元（apple / google）。月の確定売上で購入額を購入元別に出すために保持する。
+    vendor: document.data.coinVendor ? String(document.data.coinVendor) : null,
     productId: String(document.data.productId || document.data.itemId || ""),
     status: document.data.paymentDate ? "succeeded" : "amount-only",
     source: "userPayments",
