@@ -128,6 +128,51 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.balance_snapshots` (
 )
 PARTITION BY DATE(snapshotAt);
 
+-- 運営が毎月作っていた月次指標CSV（2026年10月以前）。月次指標の画面で、この月までは CSV の値を正とする。
+-- runbook-2026-11/import-monthly-kpi-csv.sh で丸ごと入れ替える。同期ジョブは書き込まない。
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.monthly_kpi_history` (
+  month STRING NOT NULL,
+  sales FLOAT64,
+  visits FLOAT64,
+  unitPrice FLOAT64,
+  photos FLOAT64,
+  presentYen FLOAT64,
+  presentCount FLOAT64,
+  uu FLOAT64,
+  members FLOAT64,
+  avgVisits FLOAT64,
+  pur FLOAT64,
+  arppu FLOAT64,
+  arpu FLOAT64,
+  newMembers FLOAT64,
+  trial FLOAT64,
+  b1Users FLOAT64,
+  b2Users FLOAT64,
+  b2Visits FLOAT64,
+  b3Users FLOAT64,
+  b3Visits FLOAT64,
+  b4Users FLOAT64,
+  b4Visits FLOAT64,
+  b5Users FLOAT64,
+  b5Visits FLOAT64,
+  serveHours FLOAT64,
+  maidReward FLOAT64,
+  profit FLOAT64,
+  costRate FLOAT64,
+  events STRING,
+  url STRING,
+  joinedMaids STRING,
+  leftMaids STRING,
+  importedAt TIMESTAMP NOT NULL
+);
+
+-- メイド報酬（手入力。計算式が独特なため）。runbook-2026-11/set-maid-reward.sh。
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.monthly_kpi_manual` (
+  month STRING NOT NULL,
+  maidReward FLOAT64,
+  enteredAt TIMESTAMP NOT NULL
+);
+
 -- 各社の報告による月の購入額（手数料控除後・経理が使う値）。手入力（runbook-2026-11/set-platform-purchases.sh）。
 -- Apple は App Store の会計月、Google・Stripe は暦月。登録が無い月は課金台帳から推定する。
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.platform_purchases` (

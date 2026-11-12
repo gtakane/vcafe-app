@@ -233,3 +233,24 @@ tbody tr:hover{background:#fdf7fc}
 .test-user-switch button.selected{background:#fff;color:var(--pink-dark);box-shadow:0 2px 8px rgba(120,60,110,.12)}
 .test-user-note{color:var(--pink-dark);font-weight:700}
 @media (max-width:720px){.topbar{flex-wrap:wrap}.test-user-switch{margin-left:0}}
+
+/* 月次指標 */
+.kpi-scroll{max-height:70vh}
+.kpi-table{border-collapse:separate;border-spacing:0;font-size:12px}
+.kpi-table th,.kpi-table td{white-space:nowrap;padding:7px 10px;border-bottom:1px solid var(--line)}
+.kpi-table thead th{position:sticky;top:0;background:#fff;z-index:2;font-size:11px;color:var(--muted)}
+.kpi-table .kpi-sticky{position:sticky;left:0;background:#fff;z-index:1;text-align:left}
+.kpi-table thead .kpi-sticky{z-index:3}
+.kpi-table .kpi-extra{color:#b3a8ba}
+.kpi-num{text-align:right;font-variant-numeric:tabular-nums}
+.kpi-num.csv{color:var(--ink)}
+.kpi-num.auto,.kpi-num.manual{color:#4a5a8a}
+.kpi-text{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:normal;min-width:160px;font-size:11px}
+.kpi-text a{display:block;color:var(--pink-dark);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kpi-diff{color:var(--pink-dark);font-weight:800;margin-left:2px}
+.kpi-provisional{margin-left:4px;font-size:9px;color:#8a4f86;background:var(--grad-soft);border-radius:8px;padding:1px 5px}
+.kpi-legend{font-size:11px;color:var(--muted);margin:4px 0 10px}
+.kpi-warnings{margin:0 0 10px;padding-left:18px;color:#b4235f;font-size:12px}
+.kpi-definitions{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px 18px;margin:0 0 10px}
+.kpi-definitions dt{font-weight:800;font-size:12px}
+.kpi-definitions dd{margin:2px 0 0;color:var(--muted);font-size:11px;line-height:1.5}

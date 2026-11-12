@@ -18,18 +18,20 @@ import CustomerDatabase from "@/components/dashboard/views/customer-database-vie
 import CrossMatrix from "@/components/dashboard/views/relations-view";
 import GrowthPanel from "@/components/dashboard/views/growth-view";
 import OverviewView from "@/components/dashboard/views/overview-view";
+import MonthlyKpiView from "@/components/dashboard/views/monthly-kpi-view";
 import { useAnalyticsData, useAttendanceSubmissions, useGrowthMetrics } from "@/components/dashboard/hooks/use-analytics-data";
 import { TestUserScopeContext } from "@/components/dashboard/shared/test-user-scope";
 
 // 「テストユーザーを含める」の選択は閲覧者のブラウザに覚えておく（再読み込みしても戻らないように）。
 const TEST_USERS_STORAGE_KEY = "vcafe.includeTestUsers";
 
-type View = "overview" | "maids" | "growth" | "users" | "relations" | "attendance";
+type View = "overview" | "maids" | "growth" | "kpi" | "users" | "relations" | "attendance";
 
 const nav: Array<{ id: View; label: string; icon: string; adminOnly?: boolean }> = [
   { id: "overview", label: "ダッシュボード", icon: "⌂" },
   { id: "maids", label: "メイド実績", icon: "♙" },
   { id: "growth", label: "グロース指標", icon: "⇗", adminOnly: true },
+  { id: "kpi", label: "月次指標", icon: "▦", adminOnly: true },
   { id: "users", label: "ユーザーDB", icon: "♧", adminOnly: true },
   { id: "relations", label: "メイド×ユーザー", icon: "◎", adminOnly: true },
   { id: "attendance", label: "勤怠", icon: "◷" },
@@ -133,8 +135,8 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
           <button className={includeTestUsers ? "selected" : ""} aria-pressed={includeTestUsers} onClick={() => changeTestUsers(true)}>含む</button>
         </div>}
         <div className="account"><div className="avatar">{viewer.name.slice(0,1)}</div><div><strong>{viewer.name}</strong><small>{viewer.role === "admin" ? "管理者" : "メイド"}</small></div><LogoutButton /></div></header>
-      {/* ユーザーDBは全会員の通算値を扱い期間に依存しないため、期間フィルタを表示しない。 */}
-      {view !== "users" && <section className="filters">
+      {/* ユーザーDB・月次指標は期間に依存しないため、期間フィルタを表示しない。 */}
+      {view !== "users" && view !== "kpi" && <section className="filters">
         <div className="presets"><button onClick={()=>presets(1)}>今日</button><button onClick={()=>presets(7)}>7日</button><button onClick={()=>presets(30)}>30日</button><button className={start===initialStart&&end===initialEnd?"selected":""} onClick={()=>{setStart(initialStart);setEnd(initialEnd)}}>今月</button></div>
         <label>開始日<input type="date" value={start} max={end} onChange={(e)=>setStart(e.target.value)}/></label><span className="range-sep">–</span><label>終了日<input type="date" value={end} min={start} onChange={(e)=>setEnd(e.target.value)}/></label>
         <label>集計<select value={granularity} onChange={(e)=>setGranularity(e.target.value as Granularity)}><option value="hour">時間別</option><option value="day">日次</option><option value="week">週次</option><option value="month">月次</option></select></label>
@@ -189,6 +191,8 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
       </>}
 
       {view === "growth" && viewer.role === "admin" && <GrowthPanel growth={growth} loading={growthLoading} error={growthError} />}
+
+      {view === "kpi" && viewer.role === "admin" && <MonthlyKpiView onExport={downloadCsv} />}
 
       {view === "users" && viewer.role === "admin" && <CustomerDatabase onExport={downloadCsv} />}
 

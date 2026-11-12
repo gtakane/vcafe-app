@@ -168,3 +168,27 @@ cd ~/vcafe-app && git pull --ff-only
 
 > Google は 2026年10月、課金台帳からの推計（236,177円）が経理の値（188,615円）より約25%多く、原因は未特定。
 > 報告額を登録すれば確定売上には影響しない。
+
+## 第5段階: テストユーザーの切り替え・ご帰宅数の数え方・月次指標（2026-11-12）
+
+- **テストユーザー**: 同期がテストユーザーの記録も `isTestUser=true` を付けて取り込むようにした。ダッシュボードの右上
+  「テストユーザー 除く／含む」で全画面の数値を切り替える（管理者のみ・既定は除く）。メイドの月次実績はアプリの集計値のため対象外。
+  未使用残高は除いた合計と含めた合計を毎朝2行記録する。含めた側の確定売上は、記録が始まった翌月（12月）から出る。
+- **ご帰宅数**: 通常ご帰宅は滞在時間÷20分（20分未満は0.5件）、予約・お試し・無料ご帰宅は1回を1件として別枠で数え、合計を出す。
+- **月次指標**（左の「月次指標」）: 運営の月次CSVと同じ項目。2026年10月以前はCSVの値を正とし、データから出し直した値と違う項目に「≠」。
+  11月以降は自動。メイド報酬だけ手入力。出来事は公式サイトのお知らせ、入店・退店はシフトから出す。
+
+**順番が大事。** 同期を先に差し替えると、切り替えの無い今のダッシュボードにテストユーザーの数値が混ざる。
+
+| 手順 | コマンド | 内容 |
+| --- | --- | --- |
+| 1 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step9-test-user-columns.sh` | テストユーザーの印の列を追加 |
+| 2 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step11-monthly-kpi-tables.sh` | 月次指標の表（CSVの記録・メイド報酬）を作成 |
+| 3 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/import-monthly-kpi-csv.sh ~/<CSVのファイル名>` | 運営の月次CSVを取り込む（先に Cloud Shell へアップロード） |
+| 4 | `bash ~/vcafe-app/vcafe-dashboard/deploy-revision-tokyo.sh` → 検証用URLで確認 → `promote-latest-canary.sh` | ダッシュボードを配備 |
+| 5 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step3-update-job-image.sh` | 同期プログラムの差し替え（以降テストユーザーも取り込む） |
+| 6 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step10-import-test-users.sh` | テストユーザーの過去分を取り込む |
+
+毎月: `set-maid-reward.sh 2026-11 <メイド報酬の合計>`（メイド報酬）、`set-platform-purchases.sh`（各社の報告額。売上が確定になる）。
+
+> CSV は売上・報酬・メイド名を含むため、公開リポジトリには置かない（Cloud Shell にアップロードして取り込むだけ）。

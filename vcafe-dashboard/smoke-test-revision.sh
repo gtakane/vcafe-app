@@ -26,6 +26,7 @@ UNAUTH_401=(
   "/api/attendance-submissions"
   "/api/customers"
   "/api/growth"
+  "/api/monthly-kpi"
   "/api/maid-reports"
   "/api/visit-logs"
 )

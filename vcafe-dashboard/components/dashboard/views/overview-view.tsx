@@ -60,7 +60,7 @@ function VisitCountPanel({ breakdown }: { breakdown: Totals["visitBreakdown"] })
     ["無料ご帰宅（3種）", breakdown.free, "無料ご帰宅券・新規ユーザー無料・新人メイド無料。1回を1件"],
   ];
   return <section className="panel"><div className="panel-head"><div><p className="eyebrow">VISIT COUNT</p><h2>ご帰宅数の内訳と数え方</h2></div><span className="badge">合計 {number.format(breakdown.total)}件</span></div>
-    <div className="rank-mix">{rows.map(([label, count, note]) => <div key={label}><span>{label}<small style={{ display: "block", color: "var(--muted)", fontWeight: 400 }}>{note}</small></span><strong>{number.format(count)}<small>件</small></strong><i><em style={{ width: `${breakdown.total ? count / breakdown.total * 100 : 0}%` }}/></i></div>)}</div>
+    <div className="rank-mix">{rows.map(([label, count, note]) => <div key={label}><span>{label}<small style={{ display: "block", color: "var(--muted)", fontWeight: 400, fontSize: 10, lineHeight: 1.5, marginTop: 2 }}>{note}</small></span><strong>{number.format(count)}<small>件</small></strong><i><em style={{ width: `${breakdown.total ? count / breakdown.total * 100 : 0}%` }}/></i></div>)}</div>
     <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>{VISIT_COUNT_DEFINITION}画面のすべての「ご帰宅数」（推移・メイド別・ユーザー別）はこの数え方です。</p>
   </section>;
 }
