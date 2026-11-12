@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { firestoreTimestampToIso, mapFirestoreUser } from "../../../lib/user-mapping.ts";
+import { firestoreTimestampToIso, mapFirestoreUserWithFlag } from "../../../lib/user-mapping.ts";
 import { classifyVisit, COIN_TO_YEN, COIN_YEN, DEFAULT_INITIAL_TIME, REWARD_POINT_YEN, visitRevenue, visitWeight } from "../../../lib/metrics.ts";
 import type { Booking, Customer, Present, Shift, Visit } from "../../../lib/types.ts";
 
@@ -69,9 +69,15 @@ function numberValue(value: unknown) {
   return Number.isFinite(number) ? number : 0;
 }
 
-export function mapUser(document: SourceDocument, secret: string): Customer | null {
-  const customer = mapFirestoreUser(document.id, document.data);
-  return customer ? { ...customer, id: pseudonymizeCustomerId(customer.id, secret) } : null;
+/** 会員。テストユーザーも isTestUser=true で返す（ダッシュボードで含める／含めないを切り替えるため）。 */
+export function mapUser(document: SourceDocument, secret: string): Customer {
+  const customer = mapFirestoreUserWithFlag(document.id, document.data);
+  return { ...customer, id: pseudonymizeCustomerId(customer.id, secret) };
+}
+
+/** 会員ごとの記録（ご帰宅・撮影・課金・プレゼント・予約）にテストユーザーの印を付ける。親の会員が分からない行は false。 */
+export function withTestUserFlag<T extends object>(row: T | null, parentId: string | undefined, testUserIds: Set<string>): (T & { isTestUser: boolean }) | null {
+  return row ? { ...row, isTestUser: testUserIds.has(parentId || "") } : null;
 }
 
 /**

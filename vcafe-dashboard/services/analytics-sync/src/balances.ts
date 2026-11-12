@@ -4,7 +4,8 @@
  *   チケット: users/{id}/userItems の category=ticket を、アイテム名・種類名で分類して所持枚数を合計
  *     ご帰宅チケット / プレミアムご帰宅チケット / ランダムご帰宅チケット / 記念撮影チケット（1枚）
  *     記念撮影チケットの「新規登録プレゼント」は無償のため別に数える（円換算0）
- * テストユーザー（users.testUser / testUesrFlag）は除く。個人単位の値は保存しない。
+ * テストユーザー（users.testUser / testUesrFlag）は既定で除く（includeTestUsers で含めた合計も出せる）。
+ * excludedTestUsers はテストユーザーの人数（含めた合計でも人数として残す）。個人単位の値は保存しない。
  */
 
 export interface BalanceTotals {
@@ -43,14 +44,17 @@ export function ticketKind(itemName: unknown, variationName: unknown): keyof Pic
   return "ticketOther";
 }
 
-export function summarizeBalances(users: UserBalanceSource[], items: UserItemSource[]): BalanceTotals {
+export function summarizeBalances(users: UserBalanceSource[], items: UserItemSource[], options: { includeTestUsers?: boolean } = {}): BalanceTotals {
   const totals: BalanceTotals = {
     users: 0, excludedTestUsers: 0, appleCoin: 0, googleCoin: 0, legacyCoin: 0, rewardPoint: 0,
     ticketGokitaku: 0, ticketPremium: 0, ticketRandom: 0, ticketCheki: 0, ticketChekiFree: 0, ticketOther: 0,
   };
   const testUsers = new Set<string>();
   for (const user of users) {
-    if (isTestUser(user.data)) { testUsers.add(user.id); totals.excludedTestUsers += 1; continue; }
+    if (isTestUser(user.data)) {
+      totals.excludedTestUsers += 1;
+      if (!options.includeTestUsers) { testUsers.add(user.id); continue; }
+    }
     totals.users += 1;
     totals.appleCoin += num(user.data.coinApple);
     totals.googleCoin += num(user.data.coinGoogle);

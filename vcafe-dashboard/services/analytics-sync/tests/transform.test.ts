@@ -266,4 +266,28 @@ test("未使用残高: テストユーザーを除き、チケットは経理シ
     users: 2, excludedTestUsers: 1, appleCoin: 100, googleCoin: 30, legacyCoin: 0, rewardPoint: 520,
     ticketGokitaku: 3, ticketPremium: 0, ticketRandom: 0, ticketCheki: 0, ticketChekiFree: 1, ticketOther: 0,
   });
+  // テストユーザーを含めた合計（ダッシュボードの「テストユーザーを含める」用）
+  const withTest = summarizeBalances(
+    [
+      { id: "u1", data: { coinApple: 100, rewardPoint: 500 } },
+      { id: "t1", data: { coinApple: 9999, rewardPoint: 1, testUser: true } },
+    ],
+    [{ userId: "t1", data: { category: "ticket", itemName: "ご帰宅チケット", variationName: "ご帰宅チケット", quantity: 50 } }],
+    { includeTestUsers: true },
+  );
+  assert.equal(withTest.users, 2);
+  assert.equal(withTest.excludedTestUsers, 1); // テストユーザーの人数
+  assert.equal(withTest.appleCoin, 10099);
+  assert.equal(withTest.ticketGokitaku, 50);
+});
+
+test("テストユーザーも会員として取り込み、isTestUser で区別する（2026-11-12〜）", async () => {
+  const { withTestUserFlag } = await import("../src/transform.ts");
+  const user = mapUser({ id: "t1", data: { nickname: "テスト", rank: "Gold", testUesrFlag: true } }, secret);
+  assert.equal(user.isTestUser, true);
+  assert.equal(mapUser({ id: "u1", data: { nickname: "ゲスト", rank: "Gold" } }, secret).isTestUser, false);
+  const tests = new Set(["t1"]);
+  assert.deepEqual(withTestUserFlag({ id: "v1" }, "t1", tests), { id: "v1", isTestUser: true });
+  assert.deepEqual(withTestUserFlag({ id: "v2" }, "u1", tests), { id: "v2", isTestUser: false });
+  assert.equal(withTestUserFlag(null, "t1", tests), null);
 });

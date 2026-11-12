@@ -27,7 +27,8 @@
       "coinApple": "FLOAT64",
       "coinGoogle": "FLOAT64",
       "recordKey": "STRING",
-      "runId": "STRING"
+      "runId": "STRING",
+      "isTestUser": "BOOL"
     },
     "payments_raw": {
       "id": "STRING",
@@ -43,7 +44,8 @@
       "vendor": "STRING",
       "recordKey": "STRING",
       "runId": "STRING",
-      "sourceUpdatedAt": "TIMESTAMP"
+      "sourceUpdatedAt": "TIMESTAMP",
+      "isTestUser": "BOOL"
     },
     "visits_raw": {
       "id": "STRING",
@@ -64,7 +66,8 @@
       "billedCoinVendor": "STRING",
       "usedTicketCount": "INT64",
       "recordKey": "STRING",
-      "runId": "STRING"
+      "runId": "STRING",
+      "isTestUser": "BOOL"
     },
     "presents_raw": {
       "id": "STRING",
@@ -78,7 +81,8 @@
       "syncedAt": "TIMESTAMP",
       "recordKey": "STRING",
       "runId": "STRING",
-      "sourceUpdatedAt": "TIMESTAMP"
+      "sourceUpdatedAt": "TIMESTAMP",
+      "isTestUser": "BOOL"
     },
     "cheki_raw": {
       "id": "STRING",
@@ -89,7 +93,8 @@
       "sourceUpdatedAt": "TIMESTAMP",
       "chekiType": "STRING",
       "recordKey": "STRING",
-      "runId": "STRING"
+      "runId": "STRING",
+      "isTestUser": "BOOL"
     },
     "bookings_raw": {
       "id": "STRING",
@@ -107,7 +112,8 @@
       "recordKey": "STRING",
       "runId": "STRING",
       "syncedAt": "TIMESTAMP",
-      "sourceUpdatedAt": "TIMESTAMP"
+      "sourceUpdatedAt": "TIMESTAMP",
+      "isTestUser": "BOOL"
     },
     "balance_snapshots": {
       "snapshotAt": "TIMESTAMP",
@@ -125,7 +131,8 @@
       "ticketChekiFree": "FLOAT64",
       "ticketOther": "FLOAT64",
       "runId": "STRING",
-      "syncedAt": "TIMESTAMP"
+      "syncedAt": "TIMESTAMP",
+      "includesTestUsers": "BOOL"
     },
     "platform_purchases": {
       "month": "STRING",

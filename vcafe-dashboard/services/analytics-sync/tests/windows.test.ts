@@ -102,17 +102,20 @@ test("取りこぼしの判定: テストユーザー分の小さな差は正常
   assert.equal(businessDayRange("2026-10-20").start.toISOString(), "2026-10-19T17:00:00.000Z");
 });
 
-test("取り込み直した日は、テストユーザー・テスト用メイドの分を除いた件数と比べる（2026-11-06 の誤検知）", async () => {
+test("取り込み直した日は、テスト用メイドの分を除いた件数と比べる（テストユーザーは取り込むので引かない）", async () => {
   const { judgeDay, judgeRepairedDay, expectedVisits } = await import("../src/completeness.ts");
   // 11/06（無料ご帰宅の公開日）: 本番219件・ダッシュボード201件で、件数だけなら warn になっていた。
   assert.equal(judgeDay({ day: "2026-11-06", production: 219, dashboard: 201 }), "warn");
-  const onlyTests = { read: 219, testUsers: 12, testMaids: 6, unresolved: 0, kept: 201 };
-  assert.equal(expectedVisits(onlyTests), 201);
-  assert.equal(judgeRepairedDay("2026-11-06", onlyTests, 201), "pass");
+  // 2026-11-12 からテストユーザー（12件）も取り込むため、ダッシュボード側は 213件になる。
+  const onlyTests = { read: 219, testUsers: 12, testMaids: 6, unresolved: 0, kept: 213 };
+  assert.equal(expectedVisits(onlyTests), 213);
+  assert.equal(judgeRepairedDay("2026-11-06", onlyTests, 213), "pass");
+  // テストユーザーの分が入っていなければ（取り込み前の状態）、差が残る。
+  assert.equal(judgeRepairedDay("2026-11-06", onlyTests, 201), "warn");
   // メイドを特定できず取り込めなかった分は実データの欠けなので、除外せず warn のまま残す。
-  const unresolved = { read: 219, testUsers: 2, testMaids: 0, unresolved: 16, kept: 201 };
-  assert.equal(expectedVisits(unresolved), 217);
-  assert.equal(judgeRepairedDay("2026-11-06", unresolved, 201), "warn");
+  const unresolved = { read: 219, testUsers: 2, testMaids: 0, unresolved: 16, kept: 203 };
+  assert.equal(expectedVisits(unresolved), 219);
+  assert.equal(judgeRepairedDay("2026-11-06", unresolved, 203), "warn");
   // 取り込み直しても入らない（ダッシュボードが0件）なら fail。
   assert.equal(judgeRepairedDay("2026-11-06", onlyTests, 0), "fail");
 });

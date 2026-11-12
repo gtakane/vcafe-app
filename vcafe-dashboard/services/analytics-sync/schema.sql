@@ -336,6 +336,17 @@ ALTER TABLE `PROJECT_ID.DATASET_ID.maid_profiles_raw`
 ALTER TABLE `PROJECT_ID.DATASET_ID.maid_monthly_raw`
   ADD COLUMN IF NOT EXISTS runId STRING;
 
+-- テストユーザーの区別（2026-11-12）。テストユーザーも取り込み、ダッシュボードで含める／含めないを切り替える。
+-- 既存の行（取り込み開始前）は NULL＝テストユーザーではない、として扱う。
+ALTER TABLE `PROJECT_ID.DATASET_ID.customers_raw` ADD COLUMN IF NOT EXISTS isTestUser BOOL;
+ALTER TABLE `PROJECT_ID.DATASET_ID.visits_raw` ADD COLUMN IF NOT EXISTS isTestUser BOOL;
+ALTER TABLE `PROJECT_ID.DATASET_ID.cheki_raw` ADD COLUMN IF NOT EXISTS isTestUser BOOL;
+ALTER TABLE `PROJECT_ID.DATASET_ID.payments_raw` ADD COLUMN IF NOT EXISTS isTestUser BOOL;
+ALTER TABLE `PROJECT_ID.DATASET_ID.presents_raw` ADD COLUMN IF NOT EXISTS isTestUser BOOL;
+ALTER TABLE `PROJECT_ID.DATASET_ID.bookings_raw` ADD COLUMN IF NOT EXISTS isTestUser BOOL;
+-- 未使用残高はテストユーザーを除いた合計（false/NULL）と含めた合計（true）を同じ時刻に2行記録する。
+ALTER TABLE `PROJECT_ID.DATASET_ID.balance_snapshots` ADD COLUMN IF NOT EXISTS includesTestUsers BOOL;
+
 -- ==========================================================================
 -- 3) ビュー
 -- ==========================================================================

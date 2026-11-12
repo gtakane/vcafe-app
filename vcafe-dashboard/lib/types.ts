@@ -42,6 +42,7 @@ export interface Customer {
   // 期間内の課金集計（payments + purchaseLog から算出。BigQuery接続時のみ）
   paymentCount?: number | null;
   paymentAmount?: number | null;
+  isTestUser?: boolean | null; // テストユーザー（users.testUser / testUesrFlag）。2026-11-12 から取り込む
 }
 
 // 課金ログ（Stripe/Webstore = payments、アプリ内課金 = purchaseLog）を1件に正規化したもの。

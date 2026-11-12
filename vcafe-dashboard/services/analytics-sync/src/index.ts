@@ -8,7 +8,8 @@ import { assertRejectRate, mapSafely, type RejectEntry } from "./safe-map.ts";
 import { validateRows } from "./row-validation.ts";
 import { assertLiveSchema, liveColumnsSql, type LiveColumn } from "./schema-precheck.ts";
 import { looksLikeMissingColumn, summarizeInsertErrors } from "./insert-errors.ts";
-import { buildMaidDirectory, mapBooking, mapCheki, pseudonymizeCustomerId, recordKeyOf, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
+import { buildMaidDirectory, mapBooking, mapCheki, pseudonymizeCustomerId, recordKeyOf, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, withTestUserFlag, type SourceDocument } from "./transform.ts";
+import { isTestUserSource } from "../../../lib/user-mapping.ts";
 import { rowInsertId } from "./row-insert-id.ts";
 import { excludedMaidIdsFrom, withoutExcludedMaids } from "./excluded-maids.ts";
 import { summarizeBalances, type UserBalanceSource, type UserItemSource } from "./balances.ts";
@@ -277,7 +278,9 @@ async function syncWindow(start: Date, end: Date, windowKind = "incremental"): P
   // ご帰宅が無く課金だけあるユーザーも customers_raw に載せるため。
   const userIds = [...new Set([...visitDocuments, ...chekiDocuments, ...userPaymentDocuments].map((document) => document.parentId).filter((id): id is string => Boolean(id)))];
   const userDocuments = await readUsers(userIds);
-  const excludedUsers = new Set(userDocuments.filter((document) => !mapUser(document, config.hmacSecret)).map((document) => document.id));
+  // テストユーザーも取り込み、isTestUser で区別する（2026-11-12〜。ダッシュボードで含める／含めないを切り替える）。
+  const testUsers = new Set(userDocuments.filter((document) => isTestUserSource(document.data)).map((document) => document.id));
+  const flag = <T extends object>(row: T | null, document: SourceDocument) => withTestUserFlag(row, document.parentId, testUsers);
   // メイド解決表は名簿(maidWorkReport)から作る。同期窓に含まれるシフトだけでは
   // 19時開始シフト＋翌1時訪問のようなケースを解決できず、nickname:* へ分裂するため。
   const maidMap = await loadMaidDirectory();
@@ -288,9 +291,8 @@ async function syncWindow(start: Date, end: Date, windowKind = "incremental"): P
     mapSafely(documents, mapper, { source, secret: config.hmacSecret, onReject });
 
   const customersResult = safe(userDocuments, (d) => mapUser(d, config.hmacSecret), "users");
-  const visitDocumentsWithoutTestUsers = visitDocuments.filter((d) => !excludedUsers.has(d.parentId || ""));
-  const visitsResult = safe(visitDocumentsWithoutTestUsers, (d) => mapVisit(d, config.hmacSecret, maidMap), "userRecordVisits");
-  const chekiResult = safe(chekiDocuments.filter((d) => !excludedUsers.has(d.parentId || "")), (d) => mapCheki(d, config.hmacSecret, maidMap, syncedAt), "userAlbum");
+  const visitsResult = safe(visitDocuments, (d) => flag(mapVisit(d, config.hmacSecret, maidMap), d), "userRecordVisits");
+  const chekiResult = safe(chekiDocuments, (d) => flag(mapCheki(d, config.hmacSecret, maidMap, syncedAt), d), "userAlbum");
   const shiftsResult = safe(shiftDocuments, (d) => mapShift(d, maidMap, config.hmacSecret), "workshifts");
   const customers = customersResult.accepted;
   const visits = visitsResult.accepted;
@@ -301,10 +303,9 @@ async function syncWindow(start: Date, end: Date, windowKind = "incremental"): P
   const payments = [
     ...paymentDocuments.map((document) => mapPayment(document, config.hmacSecret)),
     ...purchaseDocuments.map((document) => mapPurchase(document, config.hmacSecret)),
-    ...userPaymentDocuments.filter((document) => !excludedUsers.has(document.parentId || ""))
-      .map((document) => mapUserPayment(document, config.hmacSecret)),
+    ...userPaymentDocuments.map((document) => flag(mapUserPayment(document, config.hmacSecret), document)),
   ].filter((row): row is NonNullable<typeof row> => Boolean(row));
-  const presentsResult = safe(presentDocuments.filter((d) => !excludedUsers.has(d.parentId || "")), (d) => mapPresent(d, config.hmacSecret, maidMap), "userRecordPresents");
+  const presentsResult = safe(presentDocuments, (d) => flag(mapPresent(d, config.hmacSecret, maidMap), d), "userRecordPresents");
   const presents = presentsResult.accepted;
 
   // 棄却率が高い＝ソース側の形が変わった可能性。静かに欠損させず窓を失敗させる。
@@ -322,8 +323,8 @@ async function syncWindow(start: Date, end: Date, windowKind = "incremental"): P
   // 取りこぼし判定（completeness.ts）で、テストの分を除いた件数と比べるための内訳。
   const visitBreakdown: VisitBreakdown = {
     read: visitDocuments.length,
-    testUsers: visitDocuments.length - visitDocumentsWithoutTestUsers.length,
-    unresolved: visitDocumentsWithoutTestUsers.length - visits.length,
+    testUsers: visitDocuments.filter((d) => testUsers.has(d.parentId || "")).length,
+    unresolved: visitDocuments.length - visits.length,
     testMaids: visits.length - keptVisits.length,
     kept: keptVisits.length,
   };
@@ -442,16 +443,16 @@ async function syncBookings() {
   const [reservations, invitations] = await Promise.all([readWholeGroup("userReservations"), readWholeGroup("userInvitations")]);
   const parentIds = [...new Set([...reservations, ...invitations].map((d) => d.parentId).filter((id): id is string => Boolean(id)))];
   const users = await readUsers(parentIds);
-  // テストユーザーの予約・招待は取り込まない（ご帰宅・課金と同じ扱い）。
-  const excludedUsers = new Set(users.filter((document) => !mapUser(document, config.hmacSecret)).map((document) => document.id));
+  // テストユーザーの予約・招待も isTestUser を付けて取り込む（2026-11-12〜）。
+  const testUsers = new Set(users.filter((document) => isTestUserSource(document.data)).map((document) => document.id));
   const maidMap = await loadMaidDirectory();
   const rows = [
-    ...reservations.filter((d) => !excludedUsers.has(d.parentId || "")).map((d) => mapBooking(d, "reservation", config.hmacSecret, maidMap)),
-    ...invitations.filter((d) => !excludedUsers.has(d.parentId || "")).map((d) => mapBooking(d, "invitation", config.hmacSecret, maidMap)),
+    ...reservations.map((d) => withTestUserFlag(mapBooking(d, "reservation", config.hmacSecret, maidMap), d.parentId, testUsers)),
+    ...invitations.map((d) => withTestUserFlag(mapBooking(d, "invitation", config.hmacSecret, maidMap), d.parentId, testUsers)),
   ].filter((row): row is NonNullable<typeof row> => Boolean(row));
   const kept = withoutExcludedMaids(rows, excludedMaids, (r) => r.maidId ?? "");
   await insertRows("bookings_raw", kept.map((row) => ({ ...row, syncedAt, runId })));
-  console.info(JSON.stringify({ bookings: { reservations: reservations.length, invitations: invitations.length, inserted: kept.length, excludedTestUsers: excludedUsers.size } }));
+  console.info(JSON.stringify({ bookings: { reservations: reservations.length, invitations: invitations.length, inserted: kept.length, testUsers: testUsers.size } }));
 }
 
 // 未使用残高（前受金）を記録する。全会員の残高と、userItems のチケット所持枚数を読み、合計だけを1行保存する。
@@ -480,9 +481,15 @@ async function syncBalances() {
     if (snapshot.size < 5000) break;
     itemCursor = snapshot.docs[snapshot.docs.length - 1];
   }
+  // テストユーザーを除いた合計と含めた合計を、同じ時刻で2行記録する（includesTestUsers で区別）。
+  const snapshotAt = new Date().toISOString();
   const totals = summarizeBalances(users, items);
-  await insertRows("balance_snapshots", [{ snapshotAt: new Date().toISOString(), source: "sync", ...totals, runId, syncedAt }]);
-  console.info(JSON.stringify({ balances: { ...totals, itemsRead: items.length } }));
+  const totalsWithTest = summarizeBalances(users, items, { includeTestUsers: true });
+  await insertRows("balance_snapshots", [
+    { snapshotAt, source: "sync", ...totals, includesTestUsers: false, runId, syncedAt },
+    { snapshotAt, source: "sync", ...totalsWithTest, includesTestUsers: true, runId, syncedAt },
+  ]);
+  console.info(JSON.stringify({ balances: { ...totals, itemsRead: items.length }, balancesWithTestUsers: totalsWithTest }));
 }
 
 function shouldSyncBalances(): boolean {
@@ -573,8 +580,8 @@ async function syncAllUsers() {
     const snapshot = await query.get();
     if (snapshot.empty) break;
     const documents = snapshot.docs.map((document): SourceDocument => ({ id: document.id, data: document.data(), updatedAt: document.updateTime.toDate().toISOString() }));
-    const rows = documents.map((document) => mapUser(document, config.hmacSecret)).filter((row): row is NonNullable<typeof row> => Boolean(row));
-    skipped += documents.length - rows.length; // テストユーザーは除外済み
+    const rows = documents.map((document) => mapUser(document, config.hmacSecret));
+    skipped += rows.filter((row) => row.isTestUser).length; // テストユーザー（isTestUser=true で取り込む）
     await insertRows("customers_raw", rows.map((row, index) => ({
       ...row, syncedAt, runId,
       recordKey: recordKeyOf(documents[index]?.path || `users/${row.id}`, config.hmacSecret),
@@ -586,7 +593,60 @@ async function syncAllUsers() {
     cursor = snapshot.docs[snapshot.docs.length - 1];
     if (snapshot.size < 1000) break;
   }
-  console.info(JSON.stringify({ allUsers: { synced: total, excludedTestUsers: skipped } }));
+  console.info(JSON.stringify({ allUsers: { synced: total, testUsers: skipped } }));
+}
+
+// テストユーザーの過去分（2026-11-12 までは取り込んでいなかった）を取り込む。SYNC_TEST_USERS=true のときだけ。
+// テストユーザーは少人数なので、日付の窓ではなく会員ごとのサブコレクションを全件読む。
+// 分析側は追記のみで、ビューが recordKey ごとに最新の行を採るため、何度実行しても二重にはならない。
+async function syncTestUserHistory() {
+  const candidateIds = new Set<string>();
+  for (const field of ["testUser", "testUesrFlag"]) {
+    for (const value of [true, "true", 1]) {
+      const snapshot = await sourceDb.collection("users").where(field, "==", value).select().get();
+      snapshot.docs.forEach((document) => candidateIds.add(document.id));
+    }
+  }
+  const userDocuments = (await readUsers([...candidateIds])).filter((document) => isTestUserSource(document.data));
+  const testIds = new Set(userDocuments.map((document) => document.id));
+  const maidMap = await loadMaidDirectory();
+  const readSub = async (userId: string, name: string): Promise<SourceDocument[]> => {
+    const snapshot = await sourceDb.collection("users").doc(userId).collection(name).get();
+    return snapshot.docs.map((document) => ({
+      id: document.id, parentId: userId, path: document.ref.path, data: document.data(),
+      updatedAt: document.updateTime.toDate().toISOString(),
+    }));
+  };
+  const present = <T>(row: T | null): row is T => row !== null;
+  const insertChunked = async (table: string, rows: object[]) => {
+    for (let index = 0; index < rows.length; index += 2000) await insertRows(table, rows.slice(index, index + 2000));
+  };
+
+  await insertRows("customers_raw", userDocuments.map((document) => ({
+    ...mapUser(document, config.hmacSecret), syncedAt, runId,
+    recordKey: recordKeyOf(document.path || `users/${document.id}`, config.hmacSecret),
+    sourceUpdatedAt: document.updatedAt ?? null,
+  })));
+  const totals = { users: testIds.size, visits: 0, cheki: 0, presents: 0, payments: 0, unresolved: 0 };
+  for (const userId of testIds) {
+    const [visitDocuments, chekiDocuments, presentDocuments, paymentDocuments] = await Promise.all([
+      readSub(userId, "userRecordVisits"), readSub(userId, "userAlbum"), readSub(userId, "userRecordPresents"), readSub(userId, "userPayments"),
+    ]);
+    const visits = visitDocuments.map((d) => withTestUserFlag(mapVisit(d, config.hmacSecret, maidMap), userId, testIds)).filter(present);
+    const cheki = chekiDocuments.map((d) => withTestUserFlag(mapCheki(d, config.hmacSecret, maidMap, syncedAt), userId, testIds)).filter(present);
+    const presents = presentDocuments.map((d) => withTestUserFlag(mapPresent(d, config.hmacSecret, maidMap), userId, testIds)).filter(present);
+    const payments = paymentDocuments.map((d) => withTestUserFlag(mapUserPayment(d, config.hmacSecret), userId, testIds)).filter(present);
+    const keptVisits = withoutExcludedMaids(visits, excludedMaids, (r) => r.maidId);
+    const keptCheki = withoutExcludedMaids(cheki, excludedMaids, (r) => r.maidId);
+    const keptPresents = withoutExcludedMaids(presents, excludedMaids, (r) => r.maidId);
+    await insertChunked("visits_raw", keptVisits.map((row) => ({ ...row, syncedAt, runId })));
+    await insertChunked("cheki_raw", keptCheki.map((row) => ({ ...row, runId })));
+    await insertChunked("presents_raw", keptPresents.map((row) => ({ ...row, syncedAt, runId })));
+    await insertChunked("payments_raw", payments.map((row) => ({ ...row, syncedAt, runId })));
+    totals.visits += keptVisits.length; totals.cheki += keptCheki.length; totals.presents += keptPresents.length; totals.payments += payments.length;
+    totals.unresolved += visitDocuments.length - visits.length;
+  }
+  console.info(JSON.stringify({ testUserHistory: totals }));
 }
 
 // メイドレポート(月次)は本番を全件読むため負荷が大きい。毎時の同期では読まず、
@@ -631,6 +691,11 @@ if (shouldSyncBookings()) {
 // 全会員の同期（SYNC_ALL_USERS=true のときのみ）。初回およびユーザー属性を最新化したいときに使う。
 if (process.env.SYNC_ALL_USERS === "true") {
   await syncAllUsers();
+}
+
+// テストユーザーの過去分（SYNC_TEST_USERS=true のときのみ。runbook-2026-11/step10-import-test-users.sh）。
+if (process.env.SYNC_TEST_USERS === "true") {
+  await syncTestUserHistory();
 }
 
 // 窓の組み立ては src/windows.ts の純関数へ委譲する（テスト可能にするため）。

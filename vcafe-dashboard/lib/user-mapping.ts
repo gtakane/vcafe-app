@@ -45,8 +45,22 @@ function birthYearOf(value: unknown): number | null {
   return Number.isInteger(year) && year > 1900 && year < 2100 ? year : null;
 }
 
+/** テストユーザー（users.testUser / testUesrFlag が真）か。 */
+export function isTestUserSource(source: Record<string, unknown>): boolean {
+  return USER_FIELD_MAP.testFlags.some((field) => flagIsTrue(source[field]));
+}
+
+/** テストユーザーは null（旧来の挙動。テストユーザーを扱わない呼び出し元向け）。 */
 export function mapFirestoreUser(documentId: string, source: Record<string, unknown>): Customer | null {
-  if (USER_FIELD_MAP.testFlags.some((field) => flagIsTrue(source[field]))) return null;
+  if (isTestUserSource(source)) return null;
+  return mapFirestoreUserWithFlag(documentId, source);
+}
+
+/**
+ * テストユーザーも含めて変換し、isTestUser で区別する（2026-11-12〜）。
+ * ダッシュボードで「テストユーザーを含める／含めない」を切り替えるため、分析側には両方を保存する。
+ */
+export function mapFirestoreUserWithFlag(documentId: string, source: Record<string, unknown>): Customer {
   const registeredAt = firestoreTimestampToIso(source[USER_FIELD_MAP.registrationDate]);
   const name = String(source[USER_FIELD_MAP.nickname] ?? "").trim() || "名称未設定";
   const rank = String(source[USER_FIELD_MAP.rank] ?? "").trim() || "未設定";
@@ -75,5 +89,6 @@ export function mapFirestoreUser(documentId: string, source: Record<string, unkn
     totalVisitAmount: numberOrNull(source.visitAmount),
     consecutiveVisitDays: numberOrNull(source.consecutiveVisitDays),
     maxConsecutiveVisitDays: numberOrNull(source.maxConsecutiveVisitDays),
+    isTestUser: isTestUserSource(source),
   };
 }

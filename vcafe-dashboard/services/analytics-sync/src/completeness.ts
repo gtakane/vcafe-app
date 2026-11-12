@@ -9,9 +9,12 @@
  * 少しの差（既定: 5件または5%の大きい方まで）は正常とみなす。
  *
  * 差がそれを超えた日は取り込み直し、そのとき読んだ本番の記録から
- * テストユーザー・テスト用メイド（EXCLUDED_MAID_IDS）の分を除いた件数（expected）と比べ直す。
+ * テスト用メイド（EXCLUDED_MAID_IDS）の分を除いた件数（expected）と比べ直す。
  * テストの多い日（例: 2026-11-06 の無料ご帰宅の公開日）を取りこぼしと誤判定しないため。
  * メイドを特定できず取り込めなかった記録は expected に残す（ダッシュボードに出ていない実データのため）。
+ *
+ * 2026-11-12 からテストユーザーも isTestUser 付きで取り込むため、ダッシュボード側の件数は
+ * テストユーザーを含めて数え、expected からもテストユーザーを引かない。
  */
 
 export interface DayCount { day: string; production: number; dashboard: number }
@@ -35,18 +38,18 @@ export function judgeDay(count: DayCount): CompletenessStatus {
 /** 取り込み直したときに数えた、その日のご帰宅記録の内訳。 */
 export interface VisitBreakdown {
   read: number; // 本番から読んだ件数
-  testUsers: number; // テストユーザーの分（除外）
+  testUsers: number; // テストユーザーの分（参考。取り込むので expected からは引かない）
   testMaids: number; // テスト用メイドの分（除外）
   unresolved: number; // メイドを特定できず取り込めなかった分（実データの欠け）
   kept: number; // 取り込んだ件数
 }
 
-/** ダッシュボードに出るべき件数＝本番の件数からテストユーザー・テスト用メイドの分を除いたもの。 */
+/** 分析側にあるべき件数＝本番の件数からテスト用メイドの分を除いたもの（テストユーザーは含む）。 */
 export function expectedVisits(breakdown: VisitBreakdown): number {
-  return breakdown.read - breakdown.testUsers - breakdown.testMaids;
+  return breakdown.read - breakdown.testMaids;
 }
 
-/** 取り込み直した日の判定。テストの分を除いた件数と比べる。 */
+/** 取り込み直した日の判定。テスト用メイドの分を除いた件数と比べる。 */
 export function judgeRepairedDay(day: string, breakdown: VisitBreakdown, dashboard: number): CompletenessStatus {
   return judgeDay({ day, production: expectedVisits(breakdown), dashboard });
 }

@@ -29,8 +29,9 @@ export function rowInsertId(row: object, fallbackTimestamp: string): string {
     return `${String(r.runId)}:${String(r.checkName)}:${String(r.checkedAt)}`;
   }
   // balance_snapshots の行（snapshotAt, source を持つ）。
+  // 同じ時刻にテストユーザーを除いた合計と含めた合計の2行を書くため、includesTestUsers も含める。
   if (r.snapshotAt != null && r.source != null) {
-    return `${String(r.runId)}:${String(r.source)}:${String(r.snapshotAt)}`;
+    return `${String(r.runId)}:${String(r.source)}:${String(r.snapshotAt)}:${r.includesTestUsers === true ? "withTest" : "noTest"}`;
   }
   return `row:${String(r.sourceUpdatedAt || fallbackTimestamp)}`;
 }
