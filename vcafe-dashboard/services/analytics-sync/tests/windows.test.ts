@@ -90,3 +90,14 @@ test("RESCAN_DAYS + RESCAN_DEEP_DAYS の合計が上限を超えたら例外", (
     /RESCAN_DAYS/,
   );
 });
+
+test("取りこぼしの判定: テストユーザー分の小さな差は正常、丸1日欠けた日は重大", async () => {
+  const { judgeDay, recentBusinessDays, businessDayRange } = await import("../src/completeness.ts");
+  assert.equal(judgeDay({ day: "2026-10-19", production: 126, dashboard: 122 }), "pass");
+  assert.equal(judgeDay({ day: "2026-10-20", production: 127, dashboard: 0 }), "fail");
+  assert.equal(judgeDay({ day: "2026-10-21", production: 100, dashboard: 88 }), "warn");
+  assert.equal(judgeDay({ day: "2026-10-22", production: 100, dashboard: 70 }), "fail");
+  // JST 11/12 10:00 時点では、営業日11/12はまだ途中なので 11/5〜11/11 を判定する
+  assert.deepEqual(recentBusinessDays(new Date("2026-11-12T01:00:00Z"), 7), ["2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11"]);
+  assert.equal(businessDayRange("2026-10-20").start.toISOString(), "2026-10-19T17:00:00.000Z");
+});

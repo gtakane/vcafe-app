@@ -12,6 +12,7 @@ import { buildMaidDirectory, mapBooking, mapCheki, pseudonymizeCustomerId, recor
 import { rowInsertId } from "./row-insert-id.ts";
 import { excludedMaidIdsFrom, withoutExcludedMaids } from "./excluded-maids.ts";
 import { summarizeBalances, type UserBalanceSource, type UserItemSource } from "./balances.ts";
+import { allowedGap, businessDayRange, judgeDay, recentBusinessDays, type DayCount } from "./completeness.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
 process.on("unhandledRejection", (error) => {
@@ -482,6 +483,52 @@ function shouldSyncBalances(): boolean {
   return Number.isInteger(hour) ? jstHour === hour : true;
 }
 
+// 取りこぼしの検知と自動の取り込み直し（src/completeness.ts）。1日1回（BALANCES と同じ時刻）。
+async function countDays(days: string[]): Promise<DayCount[]> {
+  const [rows] = await bigquery.query({
+    location: process.env.BIGQUERY_LOCATION || "asia-northeast1",
+    params: { start: days[0], end: days[days.length - 1] },
+    query: `SELECT FORMAT_DATE("%Y-%m-%d", DATE(TIMESTAMP_SUB(\`at\`, INTERVAL 2 HOUR), "Asia/Tokyo")) AS day, COUNT(*) AS n
+            FROM \`${config.analyticsProjectId}.${config.dataset}.visits_current_range\`(DATE(@start), DATE(@end), NULL) GROUP BY day`,
+  });
+  const dashboard = new Map((rows as Array<{ day: string; n: number }>).map((r) => [String(r.day), Number(r.n) || 0]));
+  const counts: DayCount[] = [];
+  for (const day of days) {
+    const { start, end } = businessDayRange(day);
+    const snapshot = await sourceDb.collectionGroup("userRecordVisits")
+      .where("enterDateTime", ">=", Timestamp.fromDate(start)).where("enterDateTime", "<", Timestamp.fromDate(end)).count().get();
+    counts.push({ day, production: snapshot.data().count, dashboard: dashboard.get(day) ?? 0 });
+  }
+  return counts;
+}
+
+async function checkCompleteness() {
+  const days = recentBusinessDays(new Date());
+  const before = await countDays(days);
+  const problems = before.filter((c) => judgeDay(c) !== "pass");
+  // 食い違った日だけを取り込み直す（本番は読み取りのみ。分析側は追記なので二重計上にはならない）。
+  for (const problem of problems) {
+    const { start, end } = businessDayRange(problem.day);
+    console.warn(JSON.stringify({ completeness: { day: problem.day, production: problem.production, dashboard: problem.dashboard, action: "repair" } }));
+    try { await syncWindow(start, end, "repair"); } catch (error) { console.error(`COMPLETENESS_REPAIR_FAILED ${problem.day}: ${(error as Error).message}`); }
+  }
+  const after = problems.length ? await countDays(problems.map((p) => p.day)) : [];
+  const checkedAt = new Date().toISOString();
+  const rows = before.map((count) => {
+    const repaired = after.find((a) => a.day === count.day);
+    const final = repaired ?? count;
+    const status = judgeDay(final);
+    return {
+      runId, checkName: `visits_daily_completeness:${count.day}`, status,
+      observedValue: final.production - final.dashboard, threshold: allowedGap(final.production),
+      details: JSON.stringify({ day: count.day, production: final.production, dashboard: final.dashboard, repaired: Boolean(repaired), dashboardBefore: count.dashboard }),
+      checkedAt,
+    };
+  });
+  try { await insertRows("dq_results", rows); } catch (error) { console.error(`DQ_RESULTS_INSERT_FAILED ${(error as Error).message}`); }
+  console.info(JSON.stringify({ completeness: { days: days.length, repaired: problems.length, remaining: rows.filter((r) => r.status !== "pass").map((r) => r.checkName) } }));
+}
+
 // 予約・招待の取り込み頻度。既定は1日1回（BOOKINGS_HOUR_JST、既定5時）。
 //   BOOKINGS=always … 毎回取り込む（初回・確認時）
 //   BOOKINGS=never  … 取り込まない
@@ -548,6 +595,8 @@ if (shouldSyncMaidReports()) {
 
 if (shouldSyncBalances()) {
   await syncBalances();
+  // 取りこぼしの検知も同じ1日1回の時刻に行う。失敗しても同期本体は止めない。
+  try { await checkCompleteness(); } catch (error) { console.error(`COMPLETENESS_CHECK_FAILED ${(error as Error).message}`); }
 } else {
   console.info("BALANCES_SKIPPED 未使用残高は1日1回（BALANCES_HOUR_JST）のみ記録します");
 }

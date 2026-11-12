@@ -129,10 +129,11 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
           ? new Date(freshness.lastSyncedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })
           : "不明";
         return <div className="freshness">
-          <span className="status-dot" style={stale || degraded ? { background: "#d6336c" } : undefined}/>
+          <span className="status-dot" style={stale || degraded || freshness?.gaps?.length ? { background: "#d6336c" } : undefined}/>
           {" "}最終同期 {label} <b>・分析用データ</b>
           {stale && <span className="error-inline"> ・{Math.floor((freshness!.freshnessLagMinutes ?? 0) / 60)}時間以上更新されていません</span>}
           {degraded && <span className="error-inline"> ・一部のデータを取得できていません</span>}
+          {freshness?.gaps?.length ? <span className="error-inline" title="毎朝、直近7営業日のご帰宅件数を本番と比べ、少ない日は自動で取り込み直しています。それでも少ないままの日です。">{" "}・取りこぼしの可能性: {freshness.gaps.map((g) => `${g.day.slice(5)}（本番${g.production}件／表示${g.dashboard}件）`).join("、")}</span> : null}
           {!freshness && <span className="error-inline"> ・同期状況を取得できませんでした</span>}
           {loading && " ・読込中"}
           {loadError && <span className="error-inline"> ・{loadError}</span>}

@@ -153,5 +153,29 @@ export async function loadSyncFreshness(): Promise<SyncFreshness | null> {
     lastEventAt: iso(row.lastEventAt),
     lastStatus: row.lastStatus ? String(row.lastStatus) : null,
     freshnessLagMinutes: row.freshnessLagMinutes == null ? null : Number(row.freshnessLagMinutes),
+    gaps: await loadCompletenessGaps(bigquery, projectId, dataset),
   };
+}
+
+/** 直近の取りこぼし判定で、取り込み直しても本番より少ないままの営業日。判定が未実施なら空。 */
+async function loadCompletenessGaps(bigquery: InstanceType<typeof BigQuery>, projectId: string, dataset: string) {
+  try {
+    const [rows] = await bigquery.query({
+      location: process.env.BIGQUERY_LOCATION || "asia-northeast1",
+      maximumBytesBilled: process.env.BIGQUERY_MAX_BYTES_BILLED || "1073741824",
+      query: `
+        WITH latest AS (
+          SELECT * FROM \`${projectId}.${dataset}.dq_results\`
+          WHERE STARTS_WITH(checkName, "visits_daily_completeness:") AND checkedAt > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY checkName ORDER BY checkedAt DESC) = 1
+        )
+        SELECT details FROM latest WHERE status != "pass" ORDER BY checkName`,
+    });
+    return (rows as Array<{ details: string }>).map((r) => {
+      const d = JSON.parse(String(r.details)) as { day: string; production: number; dashboard: number };
+      return { day: d.day, production: Number(d.production) || 0, dashboard: Number(d.dashboard) || 0 };
+    });
+  } catch {
+    return [];
+  }
 }

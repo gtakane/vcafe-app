@@ -216,4 +216,6 @@ export interface SyncFreshness {
   lastEventAt: string | null;
   lastStatus: string | null;
   freshnessLagMinutes: number | null;
+  // 取りこぼしの検知（直近の判定で、本番より件数が少ないまま直らなかった営業日）。
+  gaps?: Array<{ day: string; production: number; dashboard: number }>;
 }

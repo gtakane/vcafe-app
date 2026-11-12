@@ -35,6 +35,7 @@ export const INSERT_TABLES = [
   "maid_monthly_raw",
   "sync_runs",
   "sync_rejects",
+  "dq_results",
 ] as const;
 
 /** INFORMATION_SCHEMA.COLUMNS から得た実テーブルの列。 */
