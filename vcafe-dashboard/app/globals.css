@@ -244,7 +244,7 @@ tbody tr:hover{background:#fdf7fc}
 .kpi-table .kpi-extra{color:#b3a8ba}
 .kpi-num{text-align:right;font-variant-numeric:tabular-nums}
 .kpi-num.csv{color:var(--ink)}
-.kpi-num.auto,.kpi-num.manual{color:#4a5a8a}
+.kpi-num.auto,.kpi-num.manual,.kpi-num.derived{color:#4a5a8a}
 .kpi-text{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:normal;min-width:160px;font-size:11px}
 .kpi-text a{display:block;color:var(--pink-dark);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .kpi-diff{color:var(--pink-dark);font-weight:800;margin-left:2px}

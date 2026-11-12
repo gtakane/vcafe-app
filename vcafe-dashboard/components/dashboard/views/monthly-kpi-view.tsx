@@ -27,9 +27,9 @@ function Cell({ column, cell }: { column: KpiColumn; cell: KpiCell }) {
   const text = formatValue(column, cell.value);
   const recomputed = cell.recomputed == null || cell.recomputed === "" ? null : formatValue(column, cell.recomputed);
   const title = [
-    cell.source === "csv" ? "運営のCSVの値" : cell.source === "manual" ? "手入力の値" : cell.source === "auto" ? "データから自動で算出" : "",
+    cell.source === "csv" ? "運営のCSVの値" : cell.source === "manual" ? "手入力の値" : cell.source === "auto" ? "データから自動で算出" : cell.source === "derived" ? (cell.note || "CSVの値から計算") : "",
     cell.differs && recomputed ? `データから出し直すと ${recomputed}` : "",
-    cell.provisional ? `暫定: ${cell.note || ""}` : "",
+    cell.provisional && cell.source !== "derived" ? `暫定: ${cell.note || ""}` : cell.provisional ? "暫定（売上が暫定）" : "",
   ].filter(Boolean).join("\n");
   return <td className={`${column.format === "text" ? "kpi-text" : "kpi-num"} ${cell.source}`} title={title || undefined}>
     {text}
@@ -41,19 +41,22 @@ function Cell({ column, cell }: { column: KpiColumn; cell: KpiCell }) {
 // 月次指標。運営が毎月作っていたCSVと同じ項目を、月ごとに1行で並べる。
 export default function MonthlyKpiView({ onExport }: { onExport: (name: string, data: Array<Array<string | number>>) => void }) {
   const includeTestUsers = useIncludeTestUsers();
-  const [data, setData] = useState<MonthlyKpiResult | null>(null);
+  const [data, setData] = useState<(MonthlyKpiResult & { cachedAt?: string }) | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true); setError("");
-    fetch(`/api/monthly-kpi?${withTestUsers(new URLSearchParams(), includeTestUsers)}`, { signal: controller.signal, cache: "no-store" })
+    const params = withTestUsers(new URLSearchParams(), includeTestUsers);
+    if (reloadKey) params.set("refresh", "1");
+    fetch(`/api/monthly-kpi?${params}`, { signal: controller.signal, cache: "no-store" })
       .then(async (response) => { const body = await response.json(); if (!response.ok) throw new Error(body.error || "月次指標を取得できませんでした"); setData(body); })
       .catch((e) => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "月次指標を取得できませんでした"); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [includeTestUsers]);
+  }, [includeTestUsers, reloadKey]);
 
   const rows: KpiRow[] = data?.rows ?? [];
   return <>
@@ -62,7 +65,11 @@ export default function MonthlyKpiView({ onExport }: { onExport: (name: string, 
         <div><p className="eyebrow">MONTHLY KPI</p><h2>月次指標</h2>
           <small>{data?.historyCutoff ? `${data.historyCutoff.replace("-", "年")}月以前は運営のCSVの値、それより後はデータから自動で算出（メイド報酬は手入力）` : "データから自動で算出（メイド報酬は手入力）"}・{includeTestUsers ? "テストユーザーを含む" : "テストユーザーを除く"}</small>
         </div>
-        <button className="secondary" disabled={!rows.length} onClick={() => onExport(`monthly-kpi_${includeTestUsers ? "with-test-users" : "without-test-users"}.csv`, kpiCsv(rows))}>CSV出力（運営のCSVと同じ並び）</button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {data?.cachedAt && <small className="muted">{new Date(data.cachedAt).toLocaleTimeString("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit" })} 時点</small>}
+          <button className="secondary" disabled={loading} onClick={() => setReloadKey((k) => k + 1)} title="集計は10分間使い回しています。メイド報酬などを登録した直後はここで読み直してください">最新にする</button>
+          <button className="secondary" disabled={!rows.length} onClick={() => onExport(`monthly-kpi_${includeTestUsers ? "with-test-users" : "without-test-users"}.csv`, kpiCsv(rows))}>CSV出力（運営のCSVと同じ並び）</button>
+        </div>
       </div>
       {data?.historyCutoff && <p className="kpi-legend">テストユーザーの切り替えで変わるのは、データから算出した値（{data.historyCutoff.replace("-", "年")}月より後の月と、CSVに無い項目）だけです。CSVの値は切り替えても変わらず、「≠」の比較相手だけが変わります。</p>}
       {data?.warnings?.length ? <ul className="kpi-warnings">{data.warnings.map((w) => <li key={w}>{w}</li>)}</ul> : null}

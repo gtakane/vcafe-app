@@ -105,3 +105,25 @@ test("公式サイトのお知らせ一覧から公開日・タイトル・URL�
     { date: "2026-11-06", title: "【6周年記念】新情報のお知らせ", url: "https://virtual.cafe-athome.com/news/20261106" },
   ]);
 });
+
+test("CSVに比率が無い月は、表示している基礎の値（CSVの売上・UUなど）から計算する（2026年7〜9月の ARPPU・ARPU）", () => {
+  const [sep] = buildMonthlyKpi({
+    months: ["2026-09"],
+    auto: new Map([["2026-09", auto("2026-09", { uu: 200, members: 5600, total: 3600 })]]),
+    sales: new Map(), manualReward: new Map(),
+    history: new Map([["2026-09", { month: "2026-09", sales: 2874447, visits: 3719, unitPrice: 773, uu: 218, maidReward: 1983558, profit: 890889, costRate: 0.69 }]]),
+    news: [], maids: [], historyCutoff: "2026-10",
+  });
+  // ARPPU = CSVの売上 ÷ CSVの UU（データの UU 200 ではない）
+  assert.equal(sep.cells.arppu.source, "derived");
+  assert.equal(Math.round(sep.cells.arppu.value as number), Math.round(2874447 / 218));
+  // ARPU = CSVの売上 ÷ 会員数（CSVに無いのでデータの5,600）
+  assert.equal(Math.round(sep.cells.arpu.value as number), Math.round(2874447 / 5600));
+  // 平均ご帰宅数 = CSVの延べ客数 ÷ CSVの UU
+  assert.equal(sep.cells.avgVisits.value, 3719 / 218);
+  // PUR = CSVの UU ÷ データの会員数
+  assert.equal(sep.cells.pur.value, 218 / 5600);
+  // CSVにある比率はそのまま
+  assert.equal(sep.cells.unitPrice.value, 773);
+  assert.equal(sep.cells.unitPrice.source, "csv");
+});

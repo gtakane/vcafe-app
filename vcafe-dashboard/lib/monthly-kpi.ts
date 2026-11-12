@@ -93,7 +93,8 @@ export type HistoryRow = Partial<Record<KpiNumberKey, number | null>> & Partial<
 
 export interface KpiCell {
   value: number | string | null;
-  source: "csv" | "auto" | "manual" | "none";
+  /** csv: 運営のCSV／auto: データから算出／manual: 手入力／derived: 表示している値（CSVを含む）から計算した比率 */
+  source: "csv" | "auto" | "manual" | "derived" | "none";
   /** CSVの月で、データから出し直した値（比較用）。 */
   recomputed?: number | string | null;
   /** CSVの値と出し直した値が食い違う。 */
@@ -129,6 +130,20 @@ export function autoValues(auto: AutoMonth | undefined, sales: MonthSales | unde
   values.costRate = ratio(reward, salesYen);
   return values;
 }
+
+/**
+ * 比率・差額の計算式（運営のCSVと同じ）。CSVにこの列が無い月は、表示している基礎の値
+ * （CSVの値、無ければデータから算出した値）から計算する。例: 2026年7〜9月の ARPPU = CSVの売上 ÷ CSVの UU。
+ */
+const DERIVED: Partial<Record<KpiNumberKey, { inputs: KpiNumberKey[]; compute: (v: Record<string, number>) => number | null }>> = {
+  unitPrice: { inputs: ["sales", "visits"], compute: (v) => ratio(v.sales, v.visits) },
+  avgVisits: { inputs: ["visits", "uu"], compute: (v) => ratio(v.visits, v.uu) },
+  pur: { inputs: ["uu", "members"], compute: (v) => ratio(v.uu, v.members) },
+  arppu: { inputs: ["sales", "uu"], compute: (v) => ratio(v.sales, v.uu) },
+  arpu: { inputs: ["sales", "members"], compute: (v) => ratio(v.sales, v.members) },
+  profit: { inputs: ["sales", "maidReward"], compute: (v) => v.sales - v.maidReward },
+  costRate: { inputs: ["maidReward", "sales"], compute: (v) => ratio(v.maidReward, v.sales) },
+};
 
 /** CSVの値と出し直した値が「違う」とみなす幅。端数や丸めの違いでは印を付けない。 */
 export function differs(format: KpiFormat, recorded: number, recomputed: number): boolean {
@@ -188,6 +203,20 @@ export function buildMonthlyKpi(input: {
       cells[key] = {
         value: computed, source,
         ...(dependsOnSales && sales?.provisional && computed != null ? { provisional: true, note: sales.note } : {}),
+      };
+    }
+    // CSVに比率・差額が無い月は、表示している基礎の値から計算し直す（CSVの売上がある月の ARPPU など）。
+    for (const [key, rule] of Object.entries(DERIVED) as Array<[KpiNumberKey, NonNullable<(typeof DERIVED)[KpiNumberKey]>]>) {
+      if (cells[key].source === "csv") continue;
+      const inputs = rule.inputs.map((input) => cells[input]);
+      if (inputs.some((cell) => typeof cell.value !== "number")) continue;
+      if (!inputs.some((cell) => cell.source === "csv")) continue; // すべてデータ由来なら上で計算済み
+      const bases = Object.fromEntries(rule.inputs.map((input) => [input, cells[input].value as number]));
+      const value = rule.compute(bases);
+      if (value == null) continue;
+      cells[key] = {
+        value, source: "derived", note: `CSVの値を含む ${rule.inputs.map((i) => KPI_COLUMNS.find((c) => c.key === i)?.label).join("・")} から計算`,
+        ...(inputs.some((cell) => cell.provisional) ? { provisional: true } : {}),
       };
     }
     return { month, cells };

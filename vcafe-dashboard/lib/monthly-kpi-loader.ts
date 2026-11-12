@@ -6,8 +6,13 @@ import { testUserCondition } from "./test-users.ts";
 import { loadBalances } from "./balances.ts";
 import { loadOfficialNews } from "./official-news.ts";
 
-/** データから出す月数（これより前はCSVの値だけを表示する。BigQuery の読み取り量を抑えるため）。 */
-export const AUTO_MONTHS = 24;
+/**
+ * データから出す最初の月（サービス開始）。CSVの空欄を埋め、CSVの値と見比べるため全期間を出す。
+ * 全期間を読むため、結果は10分間使い回す（refresh で読み直し）。
+ */
+export const AUTO_FROM = "2020-11";
+const CACHE_MS = 10 * 60 * 1000;
+const cache = new Map<string, { at: number; value: MonthlyKpiResult }>();
 /** 月の確定売上を出せる最初の月（経理の11/1の残高を基準値にしている）。 */
 const FIRST_SALES_MONTH = "2026-11";
 
@@ -21,7 +26,17 @@ export interface MonthlyKpiResult {
 
 const businessMonth = (column: string) => `FORMAT_DATE("%Y-%m", DATE(TIMESTAMP_SUB(${column}, INTERVAL 2 HOUR), "Asia/Tokyo"))`;
 
-export async function loadMonthlyKpi(options: { includeTestUsers: boolean; now?: Date }): Promise<MonthlyKpiResult> {
+export async function loadMonthlyKpi(options: { includeTestUsers: boolean; refresh?: boolean; now?: Date }): Promise<MonthlyKpiResult & { cachedAt: string }> {
+  const cacheKey = options.includeTestUsers ? "include" : "exclude";
+  const cached = cache.get(cacheKey);
+  if (!options.refresh && !options.now && cached && Date.now() - cached.at < CACHE_MS) return { ...cached.value, cachedAt: new Date(cached.at).toISOString() };
+  const value = await loadMonthlyKpiUncached(options);
+  const at = Date.now();
+  cache.set(cacheKey, { at, value });
+  return { ...value, cachedAt: new Date(at).toISOString() };
+}
+
+async function loadMonthlyKpiUncached(options: { includeTestUsers: boolean; now?: Date }): Promise<MonthlyKpiResult> {
   const projectId = process.env.BIGQUERY_PROJECT_ID;
   const dataset = process.env.BIGQUERY_DATASET;
   if (!projectId || !dataset) throw new Error("BigQueryの環境変数が設定されていません");
@@ -31,9 +46,7 @@ export async function loadMonthlyKpi(options: { includeTestUsers: boolean; now?:
   const maximumBytesBilled = process.env.BIGQUERY_MAX_BYTES_BILLED || "1073741824";
   const now = options.now ?? new Date();
   const currentMonth = new Date(now.getTime() + 7 * 3600000).toISOString().slice(0, 7); // 営業日（JST-2h）の月
-  const [cy, cm] = currentMonth.split("-").map(Number);
-  const autoFromDate = new Date(Date.UTC(cy, cm - AUTO_MONTHS, 1));
-  const autoFrom = autoFromDate.toISOString().slice(0, 7);
+  const autoFrom = AUTO_FROM;
   const autoMonths = monthRange(autoFrom, currentMonth);
   const params = { from: `${autoFrom}-01`, to: `${currentMonth}-28`, months: autoMonths, includeTestUsers: options.includeTestUsers };
   const t = (name: string) => `\`${projectId}.${dataset}.${name}\``;
@@ -43,27 +56,22 @@ export async function loadMonthlyKpi(options: { includeTestUsers: boolean; now?:
     try { return await run(query); } catch (error) { warnings.push(`${label}を取得できませんでした`); console.warn(`MONTHLY_KPI_${label} ${(error as Error).message}`); return []; }
   };
 
-  const [visitRows, bucketRows, photoRows, presentRows, memberRows, maidRows, historyRows, rewardRows] = await Promise.all([
+  const [visitRows, photoRows, presentRows, memberRows, maidRows, historyRows, rewardRows] = await Promise.all([
+    // ご帰宅の集計と回数帯を1回の読み取りで出す（全期間を読むため、同じ表を2回読まない）。
+    // 回数帯: 通常ご帰宅の回数（実回数）で分け、その人たちの合計ご帰宅数（全区分）を足す。
     run(`
       WITH v AS (
         SELECT customerId, type, ${VISIT_COUNT_SQL} AS units, COALESCE(NULLIF(minutes, 0), weight * 20, 20) AS stay, ${businessMonth("`at`")} AS month
         FROM ${t("visits_current_range")}(DATE(@from), LAST_DAY(DATE(@to)), NULL)
         WHERE ${testUserCondition()}
-      )
-      SELECT month, SUM(IF(type = "paid", units, 0)) AS normal, COUNTIF(type = "paid") AS normalVisits,
-        COUNTIF(type = "reservation") AS reservation, COUNTIF(type = "trial") AS trial, COUNTIF(type = "free") AS free,
-        SUM(units) AS total, SUM(stay) AS serveMinutes, COUNT(DISTINCT IF(type = "paid", customerId, NULL)) AS uu
-      FROM v GROUP BY month`),
-    // 回数帯: 通常ご帰宅の回数（実回数）で分け、その人たちの合計ご帰宅数（全区分）を足す。
-    run(`
-      WITH v AS (
-        SELECT customerId, type, ${VISIT_COUNT_SQL} AS units, ${businessMonth("`at`")} AS month
-        FROM ${t("visits_current_range")}(DATE(@from), LAST_DAY(DATE(@to)), NULL)
-        WHERE ${testUserCondition()}
       ), u AS (
-        SELECT month, customerId, COUNTIF(type = "paid") AS n, SUM(units) AS units FROM v GROUP BY month, customerId HAVING n > 0
+        SELECT month, customerId, COUNTIF(type = "paid") AS n, SUM(IF(type = "paid", units, 0)) AS normal,
+          COUNTIF(type = "reservation") AS reservation, COUNTIF(type = "trial") AS trial, COUNTIF(type = "free") AS free,
+          SUM(units) AS units, SUM(stay) AS stay
+        FROM v GROUP BY month, customerId
       )
-      SELECT month,
+      SELECT month, SUM(normal) AS normal, SUM(n) AS normalVisits, SUM(reservation) AS reservation, SUM(trial) AS trial, SUM(free) AS free,
+        SUM(units) AS total, SUM(stay) AS serveMinutes, COUNTIF(n > 0) AS uu,
         COUNTIF(n = 1) AS b1Users,
         COUNTIF(n BETWEEN 2 AND 4) AS b2Users, SUM(IF(n BETWEEN 2 AND 4, units, 0)) AS b2Visits,
         COUNTIF(n BETWEEN 5 AND 19) AS b3Users, SUM(IF(n BETWEEN 5 AND 19, units, 0)) AS b3Visits,
@@ -103,7 +111,7 @@ export async function loadMonthlyKpi(options: { includeTestUsers: boolean; now?:
   const auto = new Map<string, AutoMonth>();
   for (const month of autoMonths) {
     const v = visitRows.find((r) => r.month === month);
-    const b = bucketRows.find((r) => r.month === month);
+    const b = v;
     const m = memberRows.find((r) => r.month === month);
     if (!v && !m) continue;
     auto.set(month, {

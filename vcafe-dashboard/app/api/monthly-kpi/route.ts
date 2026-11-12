@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
   if (process.env.ANALYTICS_BACKEND !== "bigquery") return NextResponse.json({ error: "月次指標は分析用データに接続した環境でのみ表示できます" }, { status: 503 });
   try {
     const includeTestUsers = includeTestUsersFrom(request.nextUrl.searchParams.get(TEST_USERS_PARAM), viewer.role);
-    const result = await loadMonthlyKpi({ includeTestUsers });
+    const result = await loadMonthlyKpi({ includeTestUsers, refresh: request.nextUrl.searchParams.get("refresh") === "1" });
     return NextResponse.json(result, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     console.error("月次指標の取得に失敗しました", error);
