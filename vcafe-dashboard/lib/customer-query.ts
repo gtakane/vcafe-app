@@ -104,7 +104,9 @@ const toNumber = (value: string | undefined) => (value === undefined || value.tr
 
 /** JSTの "YYYY-MM-DD"。 */
 export function jstDay(iso: string): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" }).format(new Date(iso));
+  // 全会員×条件の数だけ呼ばれるため、Intl.DateTimeFormat を作らず時差の足し算で出す（日本は夏時間なし）。
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? "" : new Date(t + 9 * 3600000).toISOString().slice(0, 10);
 }
 
 function dayDiff(fromDay: string, toDay: string): number {

@@ -105,10 +105,10 @@ export function valueSnapshot(s: BalanceSnapshot): PlatformYen {
   return { apple, google, stripe, total: apple + google + stripe };
 }
 
+// 日本時間の日付と時（日本は夏時間が無いため +9時間で正確に出せる。Intl を毎回作らない）。
 const jstParts = (iso: string) => {
-  const p = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false }).formatToParts(new Date(iso));
-  const get = (t: string) => p.find((x) => x.type === t)?.value ?? "";
-  return { day: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")) % 24 };
+  const d = new Date(Date.parse(iso) + 9 * 3600000);
+  return { day: d.toISOString().slice(0, 10), hour: d.getUTCHours() };
 };
 
 function nextMonth(month: string): string {

@@ -213,9 +213,17 @@ function computeGrowthFromMock(start: string, end: string): GrowthMetrics {
   const shifts: GrowthShiftRow[] = mockAnalyticsData.shifts.map((s) => ({ maidId: s.maidId, scheduledStart: s.scheduledStart, scheduledEnd: s.scheduledEnd, actualStart: s.actualStart, actualEnd: s.actualEnd }));
   const growth = computeGrowth(start, end, registrations, visits, shifts);
   // モックでも画面を確認できるよう、同じ計算でデモ用の施策指標を作る。
+  const mockPayments = mockCustomers.filter((c) => c.lastPaymentAt).map((c) => ({ customerId: c.id, at: c.lastPaymentAt!, amount: c.paymentAmount || 0 }));
+  const monthOf = (iso: string) => new Date(Date.parse(iso) + 9 * 3600000).toISOString().slice(0, 7);
   growth.insights = computeInsights({
     range: { start, end }, now: new Date(`${end}T15:00:00Z`), registrations,
-    payments: mockCustomers.filter((c) => c.lastPaymentAt).map((c) => ({ customerId: c.id, at: c.lastPaymentAt!, amount: c.paymentAmount || 0 })),
+    firstPaidAt: new Map(mockPayments.map((p) => [p.customerId, p.at])),
+    recentPayments: mockPayments,
+    paidMonths: mockPayments.map((p) => ({ customerId: p.customerId, month: monthOf(p.at) })),
+    monthlyPayments: [...new Set(mockPayments.map((p) => monthOf(p.at)))].map((month) => {
+      const rows = mockPayments.filter((p) => monthOf(p.at) === month);
+      return { month, payingUsers: new Set(rows.map((p) => p.customerId)).size, amount: rows.reduce((sum, p) => sum + p.amount, 0) };
+    }),
     visits: mockAnalyticsData.visits.map((v) => ({ customerId: v.customerId, maidId: v.maidId, at: v.at, type: v.type, entryType: v.entryType })),
     usage: [],
   });

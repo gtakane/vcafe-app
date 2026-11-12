@@ -16,7 +16,8 @@ test("14日以内の初回課金率: 14日を過ぎて課金した人は未転�
     { customerId: "a", at: "2026-11-04T03:00:00Z", amount: 1000 },
     { customerId: "b", at: "2026-11-21T03:00:00Z", amount: 1000 },
   ];
-  const r = firstPaymentRate(regs, pays, range, new Date("2026-11-25T00:00:00Z"));
+  const firstPaidAt = new Map(pays.map((p) => [p.customerId, p.at]));
+  const r = firstPaymentRate(regs, firstPaidAt, range, new Date("2026-11-25T00:00:00Z"));
   assert.deepEqual({ registrations: r.registrations, judged: r.judged, converted: r.converted, pending: r.pending }, { registrations: 4, judged: 3, converted: 1, pending: 1 });
   assert.equal(r.rate, 1 / 3);
 });
@@ -49,18 +50,13 @@ test("新人メイド無料からの有料再訪: 同じメイドへの有料ご
 
 test("月ごとの課金者数と1人あたり額、登録月コホート", () => {
   assert.deepEqual(monthsBack("2026-02", 3), ["2025-12", "2026-01", "2026-02"]);
-  const pays = [
-    { customerId: "a", at: "2026-10-05T03:00:00Z", amount: 3000 },
-    { customerId: "a", at: "2026-10-20T03:00:00Z", amount: 1000 },
-    { customerId: "b", at: "2026-10-31T16:00:00Z", amount: 999 }, // JSTでは11/1
-  ];
-  const m = monthlyPaying(pays, [{ month: "2026-10", usingUsers: 4, usage: 10000 }], ["2026-10", "2026-11"]);
-  assert.deepEqual(m[0], { month: "2026-10", payingUsers: 1, paymentAmount: 4000, arppu: 4000, usingUsers: 4, usage: 10000, usagePerUser: 2500 });
-  assert.equal(m[1].payingUsers, 1);
-  const regs = [{ id: "a", registeredAt: "2026-10-01T03:00:00Z" }, { id: "c", registeredAt: "2026-10-02T03:00:00Z" }];
-  const cohorts = payingCohorts(regs, pays, ["2026-10"], "2026-11");
-  assert.equal(cohorts[0].size, 2);
-  assert.equal(cohorts[0].rates[0], 0.5); // 10月に a が課金
+  const m = monthlyPaying([{ month: "2026-10", payingUsers: 2, amount: 4001 }], [{ month: "2026-10", usingUsers: 4, usage: 10000 }], ["2026-10", "2026-11"]);
+  assert.deepEqual(m[0], { month: "2026-10", payingUsers: 2, paymentAmount: 4001, arppu: 2001, usingUsers: 4, usage: 10000, usagePerUser: 2500 });
+  assert.deepEqual(m[1], { month: "2026-11", payingUsers: 0, paymentAmount: 0, arppu: 0, usingUsers: 0, usage: 0, usagePerUser: 0 });
+  const regs = [{ id: "a", registeredAt: "2026-10-01T03:00:00Z" }, { id: "c", registeredAt: "2026-10-02T03:00:00Z" }, { id: "z", registeredAt: "2026-09-30T16:00:00Z" }]; // z はJSTで10/1
+  const cohorts = payingCohorts(regs, [{ customerId: "a", month: "2026-10" }, { customerId: "b", month: "2026-11" }], ["2026-10"], "2026-11");
+  assert.equal(cohorts[0].size, 3);
+  assert.equal(cohorts[0].rates[0], 1 / 3); // 10月に a が課金
   assert.equal(cohorts[0].rates[1], 0); // 11月は誰も課金していない（b は対象外）
   assert.equal(cohorts[0].rates[2], null); // まだ来ていない月
 });

@@ -18,6 +18,8 @@ export interface InsightRegistration { id: string; registeredAt: string | null }
 export interface InsightPayment { customerId: string; at: string; amount: number }
 export interface InsightVisit { customerId: string; maidId: string; at: string; type: Visit["type"]; entryType?: string | null; revenue?: number }
 export interface InsightMonthlyUsage { month: string; usingUsers: number; usage: number } // 有料利用（消費）の月次集計（SQLで算出）
+export interface InsightMonthlyPayment { month: string; payingUsers: number; amount: number } // 課金の月次集計（SQLで算出）
+export interface InsightPaidMonth { customerId: string; month: string } // 会員が課金した月（重複なし・SQLで算出）
 
 export interface RateResult { total: number; judged: number; converted: number; rate: number | null; pending: number }
 
@@ -47,8 +49,10 @@ export interface GrowthInsights {
 }
 
 const DAY_MS = 86400000;
-const jstMonth = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit" }).format(new Date(iso)).slice(0, 7);
-const jstDay = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" }).format(new Date(iso));
+// 日本時間の日付・月。Intl.DateTimeFormat を呼ぶたびに作るとメモリを大量に使う
+// （2026-11-12、課金2万件×12か月で512MBを超えて強制終了した）ため、時差の足し算で出す。
+const jstDay = (iso: string) => new Date(Date.parse(iso) + 9 * 3600000).toISOString().slice(0, 10);
+const jstMonth = (iso: string) => jstDay(iso).slice(0, 7);
 
 export function monthsBack(endMonth: string, count: number): string[] {
   const [y, m] = endMonth.split("-").map(Number);
@@ -69,19 +73,14 @@ const rate = (converted: number, judged: number) => (judged ? converted / judged
  * 1. 期間内の新規登録者のうち、登録から14日以内に初めて課金した人の割合。
  *    登録から14日経っていない人は判定できないため分母から外し、「判定待ち」として数える。
  */
-export function firstPaymentRate(registrations: InsightRegistration[], payments: InsightPayment[], range: { start: string; end: string }, now: Date): GrowthInsights["firstPayment"] {
+export function firstPaymentRate(registrations: InsightRegistration[], firstPaidAt: Map<string, string>, range: { start: string; end: string }, now: Date): GrowthInsights["firstPayment"] {
   const inRange = registrations.filter((r) => r.registeredAt && jstDay(r.registeredAt) >= range.start && jstDay(r.registeredAt) <= range.end);
-  const firstPaid = new Map<string, number>();
-  for (const p of payments) {
-    const t = Date.parse(p.at);
-    const current = firstPaid.get(p.customerId);
-    if (current === undefined || t < current) firstPaid.set(p.customerId, t);
-  }
   let judged = 0, converted = 0, pending = 0;
   for (const r of inRange) {
     const registered = Date.parse(r.registeredAt!);
     const deadline = registered + FIRST_PAYMENT_WINDOW_DAYS * DAY_MS;
-    const paidAt = firstPaid.get(r.id);
+    const paid = firstPaidAt.get(r.id);
+    const paidAt = paid ? Date.parse(paid) : undefined;
     if (paidAt !== undefined && paidAt <= deadline) { judged += 1; converted += 1; continue; }
     if (deadline > now.getTime()) { pending += 1; continue; } // まだ14日経っていない
     judged += 1;
@@ -130,11 +129,10 @@ export function freshMaidFreeRevisit(visits: InsightVisit[], range: { start: str
 }
 
 /** 4. 月ごとの課金者数・課金者1人あたり課金額と、有料利用者数・1人あたり利用額。 */
-export function monthlyPaying(payments: InsightPayment[], usage: InsightMonthlyUsage[], months: string[]): MonthlyPayingPoint[] {
+export function monthlyPaying(payments: InsightMonthlyPayment[], usage: InsightMonthlyUsage[], months: string[]): MonthlyPayingPoint[] {
   return months.map((month) => {
-    const inMonth = payments.filter((p) => jstMonth(p.at) === month);
-    const payingUsers = new Set(inMonth.map((p) => p.customerId)).size;
-    const paymentAmount = Math.round(inMonth.reduce((sum, p) => sum + (Number(p.amount) || 0), 0));
+    const p = payments.find((x) => x.month === month);
+    const payingUsers = p?.payingUsers ?? 0, paymentAmount = Math.round(p?.amount ?? 0);
     const u = usage.find((x) => x.month === month);
     const usingUsers = u?.usingUsers ?? 0, used = Math.round(u?.usage ?? 0);
     return {
@@ -145,22 +143,27 @@ export function monthlyPaying(payments: InsightPayment[], usage: InsightMonthlyU
 }
 
 /** 5. 登録月ごとに、登録から k か月目に課金した人の割合（k=0 は登録月）。 */
-export function payingCohorts(registrations: InsightRegistration[], payments: InsightPayment[], months: string[], currentMonth: string): CohortRow[] {
+export function payingCohorts(registrations: InsightRegistration[], paidMonthRows: InsightPaidMonth[], months: string[], currentMonth: string): CohortRow[] {
   const paidMonths = new Map<string, Set<number>>();
-  for (const p of payments) {
+  for (const p of paidMonthRows) {
     const set = paidMonths.get(p.customerId) || new Set<number>();
-    set.add(monthIndex(jstMonth(p.at)));
+    set.add(monthIndex(p.month));
     paidMonths.set(p.customerId, set);
   }
   const current = monthIndex(currentMonth);
+  const byMonth = new Map<string, InsightRegistration[]>();
+  for (const r of registrations) {
+    if (!r.registeredAt) continue;
+    const m = jstMonth(r.registeredAt);
+    byMonth.set(m, [...(byMonth.get(m) || []), r]);
+  }
   return months.map((month) => {
-    const cohort = registrations.filter((r) => r.registeredAt && jstMonth(r.registeredAt) === month);
+    const cohort = byMonth.get(month) || [];
     const start = monthIndex(month);
     const rates = Array.from({ length: COHORT_MONTHS }, (_, k) => {
       if (start + k > current) return null;
       if (!cohort.length) return 0;
-      const paid = cohort.filter((r) => paidMonths.get(r.id)?.has(start + k)).length;
-      return paid / cohort.length;
+      return cohort.filter((r) => paidMonths.get(r.id)?.has(start + k)).length / cohort.length;
     });
     return { month, size: cohort.length, rates };
   });
@@ -170,7 +173,10 @@ export function computeInsights(input: {
   range: { start: string; end: string };
   now: Date;
   registrations: InsightRegistration[];
-  payments: InsightPayment[];
+  firstPaidAt: Map<string, string>; // 会員ごとの初回課金日時（全期間）
+  recentPayments: InsightPayment[]; // 2026-11-06（無料ご帰宅の開始）以降の課金
+  paidMonths: InsightPaidMonth[];
+  monthlyPayments: InsightMonthlyPayment[];
   visits: InsightVisit[];
   usage: InsightMonthlyUsage[];
 }): GrowthInsights {
@@ -179,11 +185,11 @@ export function computeInsights(input: {
   const currentMonth = jstMonth(input.now.toISOString());
   return {
     asOf: jstDay(input.now.toISOString()),
-    firstPayment: firstPaymentRate(input.registrations, input.payments, input.range, input.now),
-    newUserFree: newUserFreeConversion(input.visits, input.payments, input.range),
+    firstPayment: firstPaymentRate(input.registrations, input.firstPaidAt, input.range, input.now),
+    newUserFree: newUserFreeConversion(input.visits, input.recentPayments, input.range),
     freshMaidFree: freshMaidFreeRevisit(input.visits, input.range),
-    monthly: monthlyPaying(input.payments, input.usage, months),
-    cohorts: payingCohorts(input.registrations, input.payments, months, currentMonth < endMonth ? currentMonth : endMonth),
+    monthly: monthlyPaying(input.monthlyPayments, input.usage, months),
+    cohorts: payingCohorts(input.registrations, input.paidMonths, months, currentMonth < endMonth ? currentMonth : endMonth),
   };
 }
 
@@ -208,10 +214,17 @@ export async function loadGrowthInsights(range: { start: string; end: string }):
   const t = (name: string) => `\`${projectId}.${dataset}.${name}\``;
   const run = async (query: string) => (await bigquery.query({ location, params, maximumBytesBilled, query }))[0] as Array<Record<string, unknown>>;
 
-  const [regRows, payRows, visitRows, usageRows] = await Promise.all([
+  const registered = `(SELECT id FROM ${t("customers_current")} WHERE registeredAt IS NOT NULL AND DATE(registeredAt, "Asia/Tokyo") >= DATE(@from))`;
+  // 集計はできるだけ BigQuery 側で済ませ、サーバーには要約だけを返す（メモリ512MBの制約）。
+  const [regRows, firstRows, paidMonthRows, monthlyRows, recentRows, visitRows, usageRows] = await Promise.all([
     run(`SELECT id, registeredAt FROM ${t("customers_current")} WHERE registeredAt IS NOT NULL AND DATE(registeredAt, "Asia/Tokyo") >= DATE(@from)`),
-    // 課金台帳（userPayments）。初回課金の判定のため、登録月の前後も含めて12か月前から取る。
-    run(`SELECT customerId, \`at\`, amount FROM ${t("payments_current_range")}(DATE_SUB(DATE(@from), INTERVAL 1 DAY), CURRENT_DATE("Asia/Tokyo"))`),
+    // 初回課金は全期間で見る（12か月より前に課金した人を「初回」と誤認しないため）。
+    run(`SELECT customerId, MIN(\`at\`) AS firstAt FROM ${t("payments_current")} WHERE customerId IN ${registered} GROUP BY customerId`),
+    run(`SELECT DISTINCT customerId, FORMAT_DATE("%Y-%m", DATE(\`at\`, "Asia/Tokyo")) AS month
+         FROM ${t("payments_current_range")}(DATE(@from), CURRENT_DATE("Asia/Tokyo")) WHERE customerId IN ${registered}`),
+    run(`SELECT FORMAT_DATE("%Y-%m", DATE(\`at\`, "Asia/Tokyo")) AS month, COUNT(DISTINCT customerId) AS payingUsers, SUM(amount) AS amount
+         FROM ${t("payments_current_range")}(DATE(@from), DATE(@end)) WHERE DATE(\`at\`, "Asia/Tokyo") >= DATE(@from) GROUP BY month`),
+    run(`SELECT customerId, \`at\`, amount FROM ${t("payments_current_range")}(DATE "2026-11-05", CURRENT_DATE("Asia/Tokyo"))`),
     // 無料ご帰宅は2026-11-06開始。期間の開始から今日までのご帰宅（その後の有料化を見るため）。
     run(`SELECT customerId, maidId, \`at\`, type, entryType FROM ${t("visits_current_range")}(GREATEST(DATE(@start), DATE "2026-11-06"), CURRENT_DATE("Asia/Tokyo"), NULL)`),
     // 有料利用（消費）の月次。経理と同じ単価（metrics.ts visitRevenue と同じ式）＋予約・招待。
@@ -234,7 +247,10 @@ export async function loadGrowthInsights(range: { start: string; end: string }):
     range,
     now: new Date(),
     registrations: regRows.map((r) => ({ id: String(r.id), registeredAt: tsIso(r.registeredAt) })),
-    payments: payRows.map((r) => ({ customerId: String(r.customerId), at: tsIso(r.at) ?? "", amount: Number(r.amount) || 0 })).filter((p) => p.at),
+    firstPaidAt: new Map(firstRows.map((r) => [String(r.customerId), tsIso(r.firstAt) ?? ""] as [string, string]).filter(([, at]) => at)),
+    paidMonths: paidMonthRows.map((r) => ({ customerId: String(r.customerId), month: String(r.month) })),
+    monthlyPayments: monthlyRows.map((r) => ({ month: String(r.month), payingUsers: Number(r.payingUsers) || 0, amount: Number(r.amount) || 0 })),
+    recentPayments: recentRows.map((r) => ({ customerId: String(r.customerId), at: tsIso(r.at) ?? "", amount: Number(r.amount) || 0 })).filter((p) => p.at),
     visits: visitRows.map((r) => ({ customerId: String(r.customerId), maidId: String(r.maidId), at: tsIso(r.at) ?? "", type: String(r.type) as Visit["type"], entryType: r.entryType ? String(r.entryType) : null })).filter((v) => v.at),
     usage: usageRows.map((r) => ({ month: String(r.month), usingUsers: Number(r.usingUsers) || 0, usage: Number(r.usage) || 0 })),
   });
