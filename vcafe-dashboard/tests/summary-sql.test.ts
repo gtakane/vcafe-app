@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSummarySql, buildTrendSql } from "../lib/summary-sql.ts";
+import { buildSummarySql, buildTrendSql, VISIT_COUNT_SQL } from "../lib/summary-sql.ts";
 import { CHEKI_PRICE } from "../lib/metrics.ts";
 
 // 段階1（サーバー集計）の前提テスト。
@@ -14,13 +14,15 @@ import { CHEKI_PRICE } from "../lib/metrics.ts";
 
 const sql = buildSummarySql("proj", "ds");
 
-test("ご帰宅数は重み合計（件数ではない）", () => {
-  assert.match(sql, /SUM\(weight\)[\s\S]*?AS visits/);
+test("ご帰宅数は visitCount と同じ数え方の合計（件数ではない）", () => {
+  assert.ok(sql.includes(`SUM(${VISIT_COUNT_SQL}) FROM v), 0) AS visits`));
   assert.ok(!/COUNT\(\*\)\s+AS visits/.test(sql), "件数で数えている");
+  // 通常は滞在時間÷20分・20分未満は0.5件、それ以外は1件
+  assert.match(VISIT_COUNT_SQL, /WHEN type = 'paid' THEN IF\(.*< 20, 0\.5, .* \/ 20\) ELSE 1 END/);
 });
 
-test("有料数は無料枠（お試し・無料3種）以外の重み合計（予約も有料に含む）", () => {
-  assert.match(sql, /SUM\(IF\(type NOT IN \('trial', 'free'\), weight, 0\)\)[\s\S]*?AS paid/);
+test("有料数は無料枠（お試し・無料3種）以外の合計（予約も有料に含む）", () => {
+  assert.ok(sql.includes(`SUM(IF(type NOT IN ('trial', 'free'), ${VISIT_COUNT_SQL}, 0))`));
   // 予約を除外していないこと
   assert.ok(!/type != 'reservation'/.test(sql), "予約を有料から除外している");
 });
@@ -65,8 +67,8 @@ test("推移は粒度ごとに正しいバケットを使う", () => {
   assert.ok(!buildTrendSql("p", "d", "hour").includes('FORMAT_TIMESTAMP("%m/%d %H:00", TIMESTAMP_SUB'));
 });
 
-test("推移も重み合計で数え、時系列順に並べる", () => {
+test("推移もご帰宅数の数え方で合計し、時系列順に並べる", () => {
   const trend = buildTrendSql("p", "d", "day");
-  assert.match(trend, /SUM\(weight\) AS visits/);
+  assert.ok(trend.includes(`SUM(${VISIT_COUNT_SQL}) AS visits`));
   assert.match(trend, /ORDER BY sortAt/);
 });

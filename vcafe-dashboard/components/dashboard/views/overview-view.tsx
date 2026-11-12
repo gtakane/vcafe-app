@@ -3,7 +3,7 @@
 import type { Granularity, Viewer } from "@/lib/types";
 import type { GrowthMetrics } from "@/lib/growth";
 import type { customerRows, summarize } from "@/lib/analytics";
-import { FREE_KIND_LABELS, FREE_KINDS } from "@/lib/metrics";
+import { FREE_KIND_LABELS, FREE_KINDS, VISIT_COUNT_DEFINITION } from "@/lib/metrics";
 import { number, pct, yen } from "../shared/format";
 import Metric from "../shared/metric-card";
 import LineChart from "../shared/line-chart";
@@ -23,7 +23,8 @@ export default function OverviewView({ viewer, totals, growth, growthError, tren
   visibleRanks: string[];
 }) {
   return <>
-        <section className="metrics"><Metric label="ご帰宅数" value={`${number.format(totals.visits)}件`} note={`ユニーク ${totals.customerCount}名`}/><Metric label="売上（税込）" value={yen.format(totals.revenue)} note={`税抜 ${yen.format(totals.revenueParts.excludingTax)}・有料ご帰宅 ${totals.paid}件`} tone="purple" hint="ご帰宅・予約・招待で消費されたコイン・ポイント・チケットを、経理の計上と同じ単価で円換算した額（Apple/Googleコイン1.19円、リワードポイント1.1円、ご帰宅チケット850円・プレミアム960円・ランダム650円、有料の記念撮影500円）。アイテム購入・有効期限切れ・無償付与は含まないため、月の確定売上とは一致しません。"/><Metric label="実働時間" value={`${totals.workHours.toFixed(1)}h`} note={`遅刻合計 ${totals.lateMinutes.toFixed(0)}分`} tone="blue"/><Metric label="無料枠ご帰宅" value={`${number.format(totals.free)}件`} note={`全ご帰宅の ${totals.visits ? (totals.free/totals.visits*100).toFixed(1) : 0}%（お試し含む）`} tone="blue" hint="お試しご帰宅と、2026年11月6日から始まった無料ご帰宅券・新規ユーザー無料・新人メイド無料の合計（実件数）。売上は0円、有料ご帰宅には含めません。"/><Metric label="記念撮影" value={`${totals.cheki}枚`} note={`撮影率 ${totals.visits ? (totals.cheki/totals.visits*100).toFixed(1) : 0}%`} tone="orange"/>{viewer.role === "admin" && <><Metric label="1日あたり利用者数(平均)" value={growth ? `${number.format(growth.avgDau)}名` : "—"} note={growth ? `最も多い日 ${number.format(growth.peakDau)}名` : (growthError || "集計中")} tone="blue" hint="DAU（デイリー・アクティブ・ユーザー）＝その営業日に1回以上ご帰宅したユーザーの実人数。同じ人が何回ご帰宅しても1名と数えます。『平均』は選択期間の1日平均、『最も多い日』は期間中で最大だった日の人数です。"/><Metric label="新規登録者数" value={growth ? `${number.format(growth.newRegistrations)}名` : "—"} note={growth ? `課金転換 ${pct(growth.newPaidConversionRate)}` : (growthError || "集計中")} tone="purple" hint="選択期間内に新しく会員登録したユーザーの人数。課金転換は、そのうち期間内に有料ご帰宅をした人の割合です。"/></>}</section>
+        <section className="metrics"><Metric label="合計ご帰宅数" value={`${number.format(totals.visits)}件`} note={`通常 ${number.format(totals.visitBreakdown.normal)}・予約 ${number.format(totals.visitBreakdown.reservation)}・お試し ${number.format(totals.visitBreakdown.trial)}・無料 ${number.format(totals.visitBreakdown.free)}／ユニーク ${totals.customerCount}名`} hint={VISIT_COUNT_DEFINITION}/><Metric label="売上（税込）" value={yen.format(totals.revenue)} note={`税抜 ${yen.format(totals.revenueParts.excludingTax)}・有料ご帰宅 ${totals.paid}件`} tone="purple" hint="ご帰宅・予約・招待で消費されたコイン・ポイント・チケットを、経理の計上と同じ単価で円換算した額（Apple/Googleコイン1.19円、リワードポイント1.1円、ご帰宅チケット850円・プレミアム960円・ランダム650円、有料の記念撮影500円）。アイテム購入・有効期限切れ・無償付与は含まないため、月の確定売上とは一致しません。"/><Metric label="実働時間" value={`${totals.workHours.toFixed(1)}h`} note={`遅刻合計 ${totals.lateMinutes.toFixed(0)}分`} tone="blue"/><Metric label="無料枠ご帰宅" value={`${number.format(totals.free)}件`} note={`全ご帰宅の ${totals.visits ? (totals.free/totals.visits*100).toFixed(1) : 0}%（お試し含む）`} tone="blue" hint="お試しご帰宅と、2026年11月6日から始まった無料ご帰宅券・新規ユーザー無料・新人メイド無料の合計（1回を1件）。売上は0円、有料ご帰宅には含めません。割合は合計ご帰宅数に対する比率です。"/><Metric label="記念撮影" value={`${totals.cheki}枚`} note={`撮影率 ${totals.visits ? (totals.cheki/totals.visits*100).toFixed(1) : 0}%`} tone="orange"/>{viewer.role === "admin" && <><Metric label="1日あたり利用者数(平均)" value={growth ? `${number.format(growth.avgDau)}名` : "—"} note={growth ? `最も多い日 ${number.format(growth.peakDau)}名` : (growthError || "集計中")} tone="blue" hint="DAU（デイリー・アクティブ・ユーザー）＝その営業日に1回以上ご帰宅したユーザーの実人数。同じ人が何回ご帰宅しても1名と数えます。『平均』は選択期間の1日平均、『最も多い日』は期間中で最大だった日の人数です。"/><Metric label="新規登録者数" value={growth ? `${number.format(growth.newRegistrations)}名` : "—"} note={growth ? `課金転換 ${pct(growth.newPaidConversionRate)}` : (growthError || "集計中")} tone="purple" hint="選択期間内に新しく会員登録したユーザーの人数。課金転換は、そのうち期間内に有料ご帰宅をした人の割合です。"/></>}</section>
+        <VisitCountPanel breakdown={totals.visitBreakdown} />
         {viewer.role === "admin" && <section className="panel"><div className="panel-head"><div><p className="eyebrow">REVENUE BREAKDOWN</p><h2>売上の内訳（税込）</h2></div><span className="badge">税抜 {yen.format(totals.revenueParts.excludingTax)}</span></div><div className="rank-mix">{([
           ["Appleコイン", totals.revenueParts.apple],
           ["Googleコイン", totals.revenueParts.google],
@@ -47,5 +48,19 @@ function ConfirmedRevenue({ growth }: { growth: GrowthMetrics | null }) {
     {!months.length ? <p className="muted" style={{ padding: "0 20px 16px" }}>{growth?.balancesError || "残高の記録がそろった月から表示します。11月分は、12月1日朝の記録後に確定します（11月1日時点の残高は経理の書き出しを基準値として使います）。"}</p> :
     <div className="table-scroll"><table className="freeze-head"><thead><tr><th>月</th><th style={{ textAlign: "right" }}>Apple</th><th style={{ textAlign: "right" }}>Google</th><th style={{ textAlign: "right" }}>Stripe</th><th style={{ textAlign: "right" }}>合計（税込）</th><th style={{ textAlign: "right" }}>税抜</th><th>状態</th></tr></thead>
       <tbody>{months.map((m) => <tr key={m.month}><td>{m.month}</td><td style={{ textAlign: "right" }}>{yen.format(m.revenue?.apple ?? 0)}</td><td style={{ textAlign: "right" }}>{yen.format(m.revenue?.google ?? 0)}</td><td style={{ textAlign: "right" }}>{yen.format(m.revenue?.stripe ?? 0)}</td><td style={{ textAlign: "right" }}><b>{yen.format(m.revenue?.total ?? 0)}</b></td><td style={{ textAlign: "right" }}>{yen.format(m.revenueExcludingTax ?? 0)}</td><td>{m.status === "confirmed" ? "確定" : "暫定"}{m.note ? `（${m.note}）` : ""}</td></tr>)}</tbody></table></div>}
+  </section>;
+}
+
+/** ご帰宅数の内訳と数え方。合計ご帰宅数が何を数えているかを画面上で読めるようにする。 */
+function VisitCountPanel({ breakdown }: { breakdown: Totals["visitBreakdown"] }) {
+  const rows: Array<[string, number, string]> = [
+    ["通常ご帰宅", breakdown.normal, `実回数 ${number.format(breakdown.normalVisits)}回。滞在時間÷20分（20分=1件、40分=2件、20分未満は0.5件）`],
+    ["予約ご帰宅", breakdown.reservation, "1回を1件"],
+    ["お試しご帰宅", breakdown.trial, "1回を1件"],
+    ["無料ご帰宅（3種）", breakdown.free, "無料ご帰宅券・新規ユーザー無料・新人メイド無料。1回を1件"],
+  ];
+  return <section className="panel"><div className="panel-head"><div><p className="eyebrow">VISIT COUNT</p><h2>ご帰宅数の内訳と数え方</h2></div><span className="badge">合計 {number.format(breakdown.total)}件</span></div>
+    <div className="rank-mix">{rows.map(([label, count, note]) => <div key={label}><span>{label}<small style={{ display: "block", color: "var(--muted)", fontWeight: 400 }}>{note}</small></span><strong>{number.format(count)}<small>件</small></strong><i><em style={{ width: `${breakdown.total ? count / breakdown.total * 100 : 0}%` }}/></i></div>)}</div>
+    <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>{VISIT_COUNT_DEFINITION}画面のすべての「ご帰宅数」（推移・メイド別・ユーザー別）はこの数え方です。</p>
   </section>;
 }

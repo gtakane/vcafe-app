@@ -18,6 +18,8 @@ import {
   shiftLateMinutes,
   weightedPaidCount,
   weightedVisitCount,
+  visitCount,
+  visitCountBreakdown,
 } from "./metrics.ts";
 
 export interface AnalyticsFilter {
@@ -156,7 +158,8 @@ export function summarize(data: ViewerScopedData) {
   // 無料枠（お試し＋11/6以降の無料3種）。内訳は実件数（無料ご帰宅は10分/20分で重み1のため件数と一致）。
   const freeKinds = countFreeKinds(data.visits);
   const free = data.visits.filter((v) => isFree(v.type)).length;
-  return { visits: weightedVisitCount(data.visits), revenue, revenueParts, customerCount, paid, free, freeKinds, cheki, workHours: workMinutes / 60, lateMinutes };
+  const visitBreakdown = visitCountBreakdown(data.visits);
+  return { visits: visitBreakdown.total, visitBreakdown, revenue, revenueParts, customerCount, paid, free, freeKinds, cheki, workHours: workMinutes / 60, lateMinutes };
 }
 
 function bucketKey(at: string, granularity: Granularity) {
@@ -184,7 +187,7 @@ export function buildTrend(visits: Visit[], granularity: Granularity, bookings: 
     const label = bucketKey(visit.at, granularity);
     const at = new Date(visit.at).getTime();
     const current = map.get(label) || { label, visits: 0, revenue: 0, sortAt: at };
-    current.visits += visit.weight ?? 1;
+    current.visits += visitCount(visit);
     current.revenue += visitTotalRevenue(visit);
     current.sortAt = Math.min(current.sortAt, at);
     map.set(label, current);
@@ -211,8 +214,8 @@ export function maidRows(data: ViewerScopedData) {
     const revenue = visits.reduce((sum, v) => sum + visitTotalRevenue(v), 0) + bookingRevenue(data.bookings?.filter((b) => b.maidId === maid.id));
     const cheki = visits.reduce((sum, v) => sum + v.cheki, 0);
     const workHours = shifts.reduce((sum, s) => sum + shiftActualHours(s), 0);
-    // 平均ご帰宅数(件/h)は予約を除いた重み付き件数 / 稼働時間（core.py: non_rsv_weight / 稼働時間数）。
-    const nonReservationWeight = visits.reduce((sum, v) => sum + (v.type === "reservation" ? 0 : v.weight ?? 1), 0);
+    // 1時間あたりご帰宅数は予約を除いたご帰宅数 / 稼働時間（数え方は lib/metrics.ts visitCount）。
+    const nonReservationWeight = visits.reduce((sum, v) => sum + (v.type === "reservation" ? 0 : visitCount(v)), 0);
     const weightedVisits = weightedVisitCount(visits);
     const repeatUsers = [...new Set(visits.map((v) => v.customerId))].filter((id) => visits.filter((v) => v.customerId === id).length >= 2).length;
     const freeVisits = visits.filter((v) => isFree(v.type)).length;
@@ -282,7 +285,7 @@ export function crossVisitCounts(visits: Visit[]): Map<string, number> {
   const map = new Map<string, number>();
   for (const visit of visits) {
     const key = `${visit.customerId}|${visit.maidId}`;
-    map.set(key, (map.get(key) || 0) + (visit.weight ?? 1));
+    map.set(key, (map.get(key) || 0) + visitCount(visit));
   }
   return map;
 }

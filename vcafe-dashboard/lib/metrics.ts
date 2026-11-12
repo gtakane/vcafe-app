@@ -241,14 +241,59 @@ export function shiftLateMinutes(shift: Pick<Shift, "scheduledStart" | "actualSt
   return Math.max(0, start - scheduled) / 60_000;
 }
 
-/** ご帰宅数（重み付き）。core.py: agg_daily/agg_by_maid の visitWeight 合算。 */
-export function weightedVisitCount(visits: Visit[]): number {
-  return visits.reduce((sum, v) => sum + (v.weight ?? 1), 0);
+/**
+ * ご帰宅数の数え方（2026-11-12 に運営が指定。画面のすべての「ご帰宅数」と月次指標の「延べ客数」）。
+ *   通常ご帰宅 … 滞在時間÷20分（20分=1件、40分=2件）。20分未満は0.5件
+ *   予約ご帰宅・お試しご帰宅・無料ご帰宅（3種） … 滞在時間に関係なくそれぞれ1件で、別枠として数える
+ *   合計ご帰宅数 … 上の4つの合計
+ * 旧定義（core.py の visitWeight＝max(1, round(滞在時間/20))を全種別に適用）とは一致しない。
+ */
+export const VISIT_COUNT_DEFINITION =
+  "通常ご帰宅は滞在時間÷20分で数えます（20分=1件、40分=2件、20分未満は0.5件）。予約・お試し・無料ご帰宅は滞在時間に関係なく1件ずつ、別枠で数えます。合計ご帰宅数はその合計です。";
+
+/** 1件のご帰宅の滞在時間（分）。滞在時間を取り込む前の古い行は、旧定義の重み（20分=1）から戻す。 */
+export function visitMinutes(visit: Pick<Visit, "minutes" | "weight">): number {
+  const minutes = Number(visit.minutes);
+  if (Number.isFinite(minutes) && minutes > 0) return minutes;
+  const weight = Number(visit.weight);
+  return Number.isFinite(weight) && weight > 0 ? weight * DEFAULT_INITIAL_TIME : DEFAULT_INITIAL_TIME;
 }
 
-/** 有料数（重み付き）。core.py: paid_weight = visitWeight * (type=='有料')。 */
+/** 1件のご帰宅を何件と数えるか。 */
+export function visitCount(visit: Pick<Visit, "type" | "minutes" | "weight">): number {
+  if (visit.type !== "paid") return 1;
+  const minutes = visitMinutes(visit);
+  return minutes < DEFAULT_INITIAL_TIME ? 0.5 : minutes / DEFAULT_INITIAL_TIME;
+}
+
+export interface VisitCountBreakdown {
+  normal: number; // 通常ご帰宅（換算後）
+  normalVisits: number; // 通常ご帰宅の実回数
+  reservation: number;
+  trial: number;
+  free: number; // 無料ご帰宅3種（無料ご帰宅券・新規ユーザー無料・新人メイド無料）
+  total: number; // 合計ご帰宅数
+}
+
+export function visitCountBreakdown(visits: Array<Pick<Visit, "type" | "minutes" | "weight">>): VisitCountBreakdown {
+  const result: VisitCountBreakdown = { normal: 0, normalVisits: 0, reservation: 0, trial: 0, free: 0, total: 0 };
+  for (const visit of visits) {
+    const count = visitCount(visit);
+    if (visit.type === "paid") { result.normal += count; result.normalVisits += 1; }
+    else result[visit.type] += count;
+    result.total += count;
+  }
+  return result;
+}
+
+/** 合計ご帰宅数（visitCount の合計）。 */
+export function weightedVisitCount(visits: Visit[]): number {
+  return visits.reduce((sum, v) => sum + visitCount(v), 0);
+}
+
+/** 有料ご帰宅数＝通常（換算後）＋予約。お試し・無料3種は含めない。 */
 export function weightedPaidCount(visits: Visit[]): number {
-  return visits.reduce((sum, v) => sum + (isPaid(v.type) ? v.weight ?? 1 : 0), 0);
+  return visits.reduce((sum, v) => sum + (isPaid(v.type) ? visitCount(v) : 0), 0);
 }
 
 /**

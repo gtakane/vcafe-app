@@ -26,7 +26,7 @@ test("summary revenue includes cheki", () => {
   assert.equal(totals.revenue, 1340);
 });
 
-test("summary ご帰宅数/有料数 are weighted by visit weight (core.py と一致)", () => {
+test("summary ご帰宅数/有料数: 通常は滞在時間÷20分、予約・お試しは1件", () => {
   const totals = summarize({
     ...mockAnalyticsData,
     visits: [
@@ -36,8 +36,9 @@ test("summary ご帰宅数/有料数 are weighted by visit weight (core.py と�
     ],
     shifts: [],
   });
-  assert.equal(totals.visits, 4); // 2 + 1 + 1（重み付きご帰宅数）
-  assert.equal(totals.paid, 3); // paid2 + reservation1、trialは除外
+  assert.equal(totals.visits, 4); // 通常（重み2＝40分）2 + お試し1 + 予約1
+  assert.equal(totals.paid, 3); // 通常2 + 予約1、お試しは除外
+  assert.deepEqual(totals.visitBreakdown, { normal: 2, normalVisits: 1, reservation: 1, trial: 1, free: 0, total: 4 });
   assert.equal(totals.revenue, 4760); // 840 + 0 + 3920
 });
 

@@ -18,6 +18,7 @@ import {
   visitWeight,
   weightedPaidCount,
   weightedVisitCount,
+  visitCountBreakdown,
 } from "../lib/metrics.ts";
 import type { Visit } from "../lib/types.ts";
 
@@ -88,14 +89,19 @@ test("isPaid counts reservation as paid but excludes trial", () => {
   assert.equal(isPaid("trial"), false);
 });
 
-test("weighted counts use visit weight (ご帰宅数/有料数)", () => {
+test("ご帰宅数: 通常は滞在時間÷20分（20分未満0.5件）、予約・お試し・無料は1件（2026-11-12 指定）", () => {
   const visits = [
-    visit({ type: "paid", weight: 2 }),
-    visit({ type: "trial", weight: 1 }),
-    visit({ type: "reservation", weight: 3 }),
+    visit({ type: "paid", minutes: 20 }), // 1
+    visit({ type: "paid", minutes: 40 }), // 2
+    visit({ type: "paid", minutes: 10 }), // 0.5
+    visit({ type: "paid", minutes: null, weight: 2 }), // 滞在時間の無い古い行は重み×20分 → 2
+    visit({ type: "trial", minutes: 10 }), // 1
+    visit({ type: "reservation", minutes: 60, weight: 3 }), // 1（滞在時間に関係なく）
+    visit({ type: "free", minutes: 20, entryType: "newUserFree" }), // 1
   ];
-  assert.equal(weightedVisitCount(visits), 6); // 2 + 1 + 3
-  assert.equal(weightedPaidCount(visits), 5); // paid2 + reservation3、trialは除外
+  assert.equal(weightedVisitCount(visits), 8.5);
+  assert.equal(weightedPaidCount(visits), 6.5); // 通常5.5 + 予約1、お試し・無料は除外
+  assert.deepEqual(visitCountBreakdown(visits), { normal: 5.5, normalVisits: 4, reservation: 1, trial: 1, free: 1, total: 8.5 });
 });
 
 test("businessDateJst rolls 00:00-01:59 JST into the previous day (core.py _biz_date)", () => {

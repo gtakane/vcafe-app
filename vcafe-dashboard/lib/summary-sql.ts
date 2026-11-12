@@ -9,8 +9,8 @@ import { CHEKI_PRICE } from "./metrics.ts";
  * `tests/summary-sql.test.ts` が両者の定義の対応を固定している。
  *
  * 対応関係:
- *   visits        = SUM(weight)                       … weightedVisitCount
- *   paid          = SUM(IF(type NOT IN ('trial', 'free'), weight, 0)) … weightedPaidCount（予約も有料・無料枠は除く）
+ *   visits        = SUM(${VISIT_COUNT_SQL})            … weightedVisitCount（lib/metrics.ts visitCount）
+ *   paid          = SUM(IF(type NOT IN ('trial', 'free'), ${VISIT_COUNT_SQL}, 0)) … weightedPaidCount（予約も有料・無料枠は除く）
  *   revenue       = SUM(revenue + cheki * CHEKI_PRICE)
  *   customerCount = COUNT(DISTINCT customerId)
  *   cheki         = SUM(cheki)
@@ -19,6 +19,13 @@ import { CHEKI_PRICE } from "./metrics.ts";
  *
  * 営業日は JST から2時間引いた日付（0:00〜1:59 は前日扱い）。
  */
+/**
+ * 1件のご帰宅を何件と数えるか（lib/metrics.ts visitCount と同じ定義）。
+ * 通常は滞在時間÷20分（20分未満は0.5件）、予約・お試し・無料は1件。滞在時間の無い古い行は重み×20分とみなす。
+ */
+export const VISIT_COUNT_SQL =
+  "CASE WHEN type = 'paid' THEN IF(COALESCE(NULLIF(minutes, 0), weight * 20, 20) < 20, 0.5, COALESCE(NULLIF(minutes, 0), weight * 20, 20) / 20) ELSE 1 END";
+
 export function buildSummarySql(projectId: string, dataset: string, maidId?: string): string {
   const businessDate = (column: string) => `DATE(TIMESTAMP_SUB(${column}, INTERVAL 2 HOUR), "Asia/Tokyo")`;
   const visitMaidFilter = maidId ? "AND maidId = @maidId" : "";
@@ -33,8 +40,8 @@ export function buildSummarySql(projectId: string, dataset: string, maidId?: str
       WHERE ${businessDate("scheduledStart")} BETWEEN DATE(@startDate) AND DATE(@endDate) ${shiftMaidFilter}
     )
     SELECT
-      COALESCE((SELECT SUM(weight) FROM v), 0) AS visits,
-      COALESCE((SELECT SUM(IF(type NOT IN ('trial', 'free'), weight, 0)) FROM v), 0) AS paid,
+      COALESCE((SELECT SUM(${VISIT_COUNT_SQL}) FROM v), 0) AS visits,
+      COALESCE((SELECT SUM(IF(type NOT IN ('trial', 'free'), ${VISIT_COUNT_SQL}, 0)) FROM v), 0) AS paid,
       COALESCE((SELECT SUM(revenue + cheki * ${CHEKI_PRICE}) FROM v), 0) AS revenue,
       (SELECT COUNT(DISTINCT customerId) FROM v) AS customerCount,
       COALESCE((SELECT SUM(cheki) FROM v), 0) AS cheki,
@@ -62,7 +69,7 @@ export function buildTrendSql(projectId: string, dataset: string, granularity: "
   return `
     SELECT
       ${bucket} AS label,
-      SUM(weight) AS visits,
+      SUM(${VISIT_COUNT_SQL}) AS visits,
       SUM(revenue + cheki * ${CHEKI_PRICE}) AS revenue,
       MIN(\`at\`) AS sortAt
     FROM \`${projectId}.${dataset}.visits_current\`
