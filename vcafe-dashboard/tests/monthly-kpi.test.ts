@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { autoValues, buildMonthlyKpi, differs, KPI_COLUMNS, kpiCsv, monthRange, type AutoMonth } from "../lib/monthly-kpi.ts";
+import { autoValues, buildMonthlyKpi, differs, KPI_COLUMNS, kpiCsv, monthRange, visitsOfMonth, type AutoMonth } from "../lib/monthly-kpi.ts";
 import { parseNewsHtml } from "../lib/official-news.ts";
 
 const auto = (month: string, over: Partial<AutoMonth> = {}): AutoMonth => ({
@@ -16,26 +16,34 @@ test("運営のCSVの列の並び（画面だけの列を除く）と同じ", ()
 });
 
 test("比率はCSVと同じ式（客単価=売上÷延べ客数、平均=延べ÷UU、PUR=UU÷会員数、ARPPU=売上÷UU、ARPU=売上÷会員数、原価率=報酬÷売上）", () => {
-  const values = autoValues(auto("2026-11"), { yen: 3210000, provisional: false, note: "" }, 2000000);
+  // 延べ客数は 通常3,000（予約・お試しは含めない。無料は0件）
+  const values = autoValues(auto("2026-11"), { yen: 3000000, provisional: false, note: "" }, 2000000);
+  assert.equal(values.visits, 3000);
   assert.equal(values.unitPrice, 1000);
-  assert.equal(values.avgVisits, 3210 / 200);
+  assert.equal(values.avgVisits, 3000 / 200);
   assert.equal(values.pur, 200 / 5600);
-  assert.equal(values.arppu, 16050);
-  assert.equal(values.arpu, 3210000 / 5600);
-  assert.equal(values.profit, 1210000);
-  assert.equal(values.costRate, 2000000 / 3210000);
+  assert.equal(values.arppu, 15000);
+  assert.equal(values.arpu, 3000000 / 5600);
+  assert.equal(values.profit, 1000000);
+  assert.equal(values.costRate, 2000000 / 3000000);
   assert.equal(values.serveHours, 1333.3);
   // 売上が無ければ売上に依存する指標も出さない
   const noSales = autoValues(auto("2026-11"), undefined, undefined);
   assert.equal(noSales.unitPrice, null);
   assert.equal(noSales.costRate, null);
-  assert.equal(noSales.avgVisits, 3210 / 200);
+  assert.equal(noSales.avgVisits, 3000 / 200);
+});
+
+test("延べ客数は通常ご帰宅の枠数（ポータルのご帰宅枠数）。2026年11月からは無料ご帰宅も足す。予約・お試しは含めない", () => {
+  assert.equal(visitsOfMonth({ month: "2026-10", normal: 3536, free: 0 }), 3536);
+  assert.equal(visitsOfMonth({ month: "2026-10", normal: 3536, free: 5 }), 3536); // 10月以前は無料を足さない
+  assert.equal(visitsOfMonth({ month: "2026-11", normal: 1286, free: 99 }), 1385);
 });
 
 test("CSVの月はCSVの値を正とし、出し直した値と違えば印を付ける。CSVに無い項目はデータで補う", () => {
   const rows = buildMonthlyKpi({
     months: ["2026-11", "2026-10"],
-    auto: new Map([["2026-10", auto("2026-10", { total: 3536 })], ["2026-11", auto("2026-11")]]),
+    auto: new Map([["2026-10", auto("2026-10", { normal: 3536 })], ["2026-11", auto("2026-11")]]),
     sales: new Map([["2026-11", { yen: 3000000, provisional: true, note: "暫定（11/12 の残高で計算）" }]]),
     manualReward: new Map([["2026-11", 1900000]]),
     history: new Map([["2026-10", { month: "2026-10", visits: 3536, photos: 807, trial: 30, presentYen: null }]]),

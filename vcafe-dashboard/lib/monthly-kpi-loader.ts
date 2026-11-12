@@ -58,7 +58,8 @@ async function loadMonthlyKpiUncached(options: { includeTestUsers: boolean; now?
 
   const [visitRows, photoRows, presentRows, memberRows, maidRows, historyRows, rewardRows] = await Promise.all([
     // ご帰宅の集計と回数帯を1回の読み取りで出す（全期間を読むため、同じ表を2回読まない）。
-    // 回数帯: 通常ご帰宅の回数（実回数）で分け、その人たちの合計ご帰宅数（全区分）を足す。
+    // 回数帯: 通常ご帰宅の回数（実回数）で分け、その人たちの通常ご帰宅の回数を足す
+    // （運営のCSVの「総数」は回数。枠数で足すと40分のご帰宅の分だけ多くなる）。
     run(`
       WITH v AS (
         SELECT customerId, type, ${VISIT_COUNT_SQL} AS units, COALESCE(NULLIF(minutes, 0), weight * 20, 20) AS stay, ${businessMonth("`at`")} AS month
@@ -73,10 +74,10 @@ async function loadMonthlyKpiUncached(options: { includeTestUsers: boolean; now?
       SELECT month, SUM(normal) AS normal, SUM(n) AS normalVisits, SUM(reservation) AS reservation, SUM(trial) AS trial, SUM(free) AS free,
         SUM(units) AS total, SUM(stay) AS serveMinutes, COUNTIF(n > 0) AS uu,
         COUNTIF(n = 1) AS b1Users,
-        COUNTIF(n BETWEEN 2 AND 4) AS b2Users, SUM(IF(n BETWEEN 2 AND 4, units, 0)) AS b2Visits,
-        COUNTIF(n BETWEEN 5 AND 19) AS b3Users, SUM(IF(n BETWEEN 5 AND 19, units, 0)) AS b3Visits,
-        COUNTIF(n BETWEEN 20 AND 49) AS b4Users, SUM(IF(n BETWEEN 20 AND 49, units, 0)) AS b4Visits,
-        COUNTIF(n >= 50) AS b5Users, SUM(IF(n >= 50, units, 0)) AS b5Visits
+        COUNTIF(n BETWEEN 2 AND 4) AS b2Users, SUM(IF(n BETWEEN 2 AND 4, n, 0)) AS b2Visits,
+        COUNTIF(n BETWEEN 5 AND 19) AS b3Users, SUM(IF(n BETWEEN 5 AND 19, n, 0)) AS b3Visits,
+        COUNTIF(n BETWEEN 20 AND 49) AS b4Users, SUM(IF(n BETWEEN 20 AND 49, n, 0)) AS b4Visits,
+        COUNTIF(n >= 50) AS b5Users, SUM(IF(n >= 50, n, 0)) AS b5Visits
       FROM u GROUP BY month`),
     run(`
       SELECT ${businessMonth("`at`")} AS month, COUNT(DISTINCT id) AS photos

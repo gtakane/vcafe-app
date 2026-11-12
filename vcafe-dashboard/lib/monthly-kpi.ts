@@ -29,7 +29,7 @@ export interface KpiColumn {
 /** 列の並びは運営のCSVと同じ（screenOnly を除く）。 */
 export const KPI_COLUMNS: KpiColumn[] = [
   { key: "sales", label: "売上", format: "yen", definition: "経理と同じ計上方法の売上（税込）。購入額＋前月末の未使用残高−当月末の未使用残高。各社の報告額を登録するまでは暫定" },
-  { key: "visits", label: "延べ客数", format: "decimal", definition: "合計ご帰宅数。通常ご帰宅は滞在時間÷20分（20分=1件、40分=2件、20分未満は0.5件）、予約・お試し・無料ご帰宅は1回を1件" },
+  { key: "visits", label: "延べ客数", format: "decimal", definition: "通常ご帰宅の枠数（メイドお給仕ポータルの「ご帰宅枠数」と同じ。滞在時間÷20分、20分=1件・40分=2件・20分未満は0.5件）。2026年11月からは無料ご帰宅（1回を1件）も含める。予約・お試しは含めない" },
   { key: "normal", label: "うち通常", format: "decimal", definition: "通常ご帰宅（滞在時間÷20分で換算）。メイドお給仕ポータルの「ご帰宅枠数」の月合計にあたる（ポータルはテストユーザーを含む）", screenOnly: true },
   { key: "reservation", label: "うち予約", format: "count", definition: "予約ご帰宅（1回を1件）", screenOnly: true },
   { key: "free", label: "うち無料", format: "count", definition: "無料ご帰宅券・新規ユーザー無料・新人メイド無料（1回を1件。2026年11月6日開始）", screenOnly: true },
@@ -46,13 +46,13 @@ export const KPI_COLUMNS: KpiColumn[] = [
   { key: "trial", label: "お試し", format: "count", definition: "お試しご帰宅の件数" },
   { key: "b1Users", label: "1回", format: "count", definition: "その月に通常ご帰宅を1回したユーザーの数" },
   { key: "b2Users", label: "2〜4回", format: "count", definition: "その月に通常ご帰宅を2〜4回したユーザーの数" },
-  { key: "b2Visits", label: "総数", format: "decimal", definition: "2〜4回のユーザーの合計ご帰宅数" },
+  { key: "b2Visits", label: "総数", format: "count", definition: "2〜4回のユーザーの通常ご帰宅の回数の合計" },
   { key: "b3Users", label: "5〜19", format: "count", definition: "その月に通常ご帰宅を5〜19回したユーザーの数" },
-  { key: "b3Visits", label: "総数", format: "decimal", definition: "5〜19回のユーザーの合計ご帰宅数" },
+  { key: "b3Visits", label: "総数", format: "count", definition: "5〜19回のユーザーの通常ご帰宅の回数の合計" },
   { key: "b4Users", label: "20〜49", format: "count", definition: "その月に通常ご帰宅を20〜49回したユーザーの数" },
-  { key: "b4Visits", label: "総数", format: "decimal", definition: "20〜49回のユーザーの合計ご帰宅数" },
+  { key: "b4Visits", label: "総数", format: "count", definition: "20〜49回のユーザーの通常ご帰宅の回数の合計" },
   { key: "b5Users", label: "50〜", format: "count", definition: "その月に通常ご帰宅を50回以上したユーザーの数" },
-  { key: "b5Visits", label: "総数", format: "decimal", definition: "50回以上のユーザーの合計ご帰宅数" },
+  { key: "b5Visits", label: "総数", format: "count", definition: "50回以上のユーザーの通常ご帰宅の回数の合計" },
   { key: "serveHours", label: "お給仕時間", format: "hours", definition: "ご帰宅の滞在時間の合計（メイドがご帰宅でお給仕した時間）" },
   { key: "maidReward", label: "メイド報酬", format: "yen", definition: "手入力（runbook-2026-11/set-maid-reward.sh）" },
   { key: "profit", label: "差額", format: "yen", definition: "売上 − メイド報酬" },
@@ -105,6 +105,14 @@ export interface KpiCell {
 
 export interface KpiRow { month: string; cells: Record<KpiKey, KpiCell> }
 
+/** 延べ客数に無料ご帰宅を含め始める月（無料ご帰宅3種は2026年11月6日開始。それより前の月は通常ご帰宅だけ）。 */
+export const FREE_IN_VISITS_FROM = "2026-11";
+
+/** 延べ客数＝通常ご帰宅の枠数（＋2026年11月からは無料ご帰宅）。予約・お試しは含めない。 */
+export function visitsOfMonth(auto: Pick<AutoMonth, "month" | "normal" | "free">): number {
+  return auto.normal + (auto.month >= FREE_IN_VISITS_FROM ? auto.free : 0);
+}
+
 const ratio = (a: number | null | undefined, b: number | null | undefined) =>
   a == null || b == null || !Number.isFinite(a) || !Number.isFinite(b) || b === 0 ? null : a / b;
 
@@ -115,14 +123,14 @@ export function autoValues(auto: AutoMonth | undefined, sales: MonthSales | unde
   const values: Partial<Record<KpiNumberKey, number | null>> = { sales: salesYen, maidReward: reward };
   if (auto) {
     Object.assign(values, {
-      visits: auto.total, normal: auto.normal, reservation: auto.reservation, free: auto.free, trial: auto.trial,
+      visits: visitsOfMonth(auto), normal: auto.normal, reservation: auto.reservation, free: auto.free, trial: auto.trial,
       photos: auto.photos, presentYen: auto.presentYen, uu: auto.uu, members: auto.members, newMembers: auto.newMembers,
       ...auto.buckets,
       serveHours: Math.round(auto.serveMinutes / 6) / 10,
-      avgVisits: ratio(auto.total, auto.uu),
+      avgVisits: ratio(visitsOfMonth(auto), auto.uu),
       pur: ratio(auto.uu, auto.members),
     });
-    values.unitPrice = ratio(salesYen, auto.total);
+    values.unitPrice = ratio(salesYen, visitsOfMonth(auto));
     values.arppu = ratio(salesYen, auto.uu);
     values.arpu = ratio(salesYen, auto.members);
   }
