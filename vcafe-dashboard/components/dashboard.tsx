@@ -109,6 +109,9 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
   const { submissions, submissionError } = useAttendanceSubmissions(viewer);
   const data = useMemo(() => filterData(remoteData, viewer, { start, end, granularity, maidId: maidId || undefined }), [remoteData, viewer, start, end, granularity, maidId]);
   const totals = summarize(data);
+  // 「含む」にしたとき、この期間にテストユーザーのご帰宅が何件入っているか（変化が無いときの確認用）。
+  const testVisits = includeTestUsers ? data.visits.filter((v) => v.isTestUser) : [];
+  const testVisitUsers = new Set(testVisits.map((v) => v.customerId)).size;
   const trend = buildTrend(data.visits, granularity, data.bookings);
   const customerStats = customerRows(data);
   // ご帰宅クロスは一度だけ集計する（ユーザー×メイド×訪問の総当たりを避ける）。
@@ -153,7 +156,9 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
         return <div className="freshness">
           <span className="status-dot" style={stale || degraded || freshness?.gaps?.length ? { background: "#d6336c" } : undefined}/>
           {" "}最終同期 {label} <b>・分析用データ</b>
-          {includeTestUsers && <span className="test-user-note"> ・テストユーザーを含めて表示中</span>}
+          {includeTestUsers && <span className="test-user-note"> ・テストユーザーを含めて表示中{view !== "users" && view !== "kpi" && (testVisits.length
+            ? `（この期間のテストユーザーのご帰宅 ${testVisits.length}回・${testVisitUsers}名）`
+            : "（この期間にテストユーザーのご帰宅はありません）")}</span>}
           {stale && <span className="error-inline"> ・{Math.floor((freshness!.freshnessLagMinutes ?? 0) / 60)}時間以上更新されていません</span>}
           {degraded && <span className="error-inline"> ・一部のデータを取得できていません</span>}
           {freshness?.gaps?.length ? <span className="error-inline" title="毎朝、直近7営業日のご帰宅件数を本番と比べ、少ない日は自動で取り込み直しています。それでも少ないままの日です。">{" "}・取りこぼしの可能性: {freshness.gaps.map((g) => `${g.day.slice(5)}（本番${g.production}件／表示${g.dashboard}件）`).join("、")}</span> : null}

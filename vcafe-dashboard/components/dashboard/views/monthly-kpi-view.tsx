@@ -64,6 +64,7 @@ export default function MonthlyKpiView({ onExport }: { onExport: (name: string, 
         </div>
         <button className="secondary" disabled={!rows.length} onClick={() => onExport(`monthly-kpi_${includeTestUsers ? "with-test-users" : "without-test-users"}.csv`, kpiCsv(rows))}>CSV出力（運営のCSVと同じ並び）</button>
       </div>
+      {data?.historyCutoff && <p className="kpi-legend">テストユーザーの切り替えで変わるのは、データから算出した値（{data.historyCutoff.replace("-", "年")}月より後の月と、CSVに無い項目）だけです。CSVの値は切り替えても変わらず、「≠」の比較相手だけが変わります。</p>}
       {data?.warnings?.length ? <ul className="kpi-warnings">{data.warnings.map((w) => <li key={w}>{w}</li>)}</ul> : null}
       <p className="kpi-legend"><sup className="kpi-diff">≠</sup> CSVの値と、データから出し直した値が違う（マウスを乗せると出し直した値）　<small className="kpi-provisional">暫定</small> 各社の報告額が未登録、または月の途中</p>
       {error ? <p className="error">{error}</p> : loading && !data ? <p className="muted">読込中…（数十秒かかることがあります）</p> :

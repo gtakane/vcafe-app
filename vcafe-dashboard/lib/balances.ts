@@ -189,6 +189,28 @@ const tsIso = (value: unknown): string | null => {
   return String(value);
 };
 
+export const TEST_USER_ESTIMATE_NOTE =
+  "テストユーザーを含む残高の記録が無い月のため、テストユーザーを除いた売上に、テストユーザーのご帰宅・予約の消費額を足した推定";
+
+/**
+ * テストユーザーを含める側で、残高の記録が足りず計算できない月（記録を始めた 2026-11 など）を補う。
+ * 除いた側の売上 ＋ テストユーザーのご帰宅・予約の消費額（経理と同じ単価）で推定し、暫定とする。
+ */
+export function fillWithTestUserEstimate(withTest: BalancesResult, withoutTest: BalancesResult, testUsage: Map<string, PlatformYen>): BalancesResult {
+  const months = withTest.months.map((month): ConfirmedMonth => {
+    if (month.revenue) return month;
+    const base = withoutTest.months.find((m) => m.month === month.month);
+    if (!base?.revenue) return month;
+    const usage = testUsage.get(month.month) ?? { apple: 0, google: 0, stripe: 0, total: 0 };
+    const revenue = plus(base.revenue, usage);
+    return {
+      ...base, status: "provisional", revenue, revenueExcludingTax: excludingTax(revenue.total),
+      note: [TEST_USER_ESTIMATE_NOTE, base.note].filter(Boolean).join("・"),
+    };
+  });
+  return { ...withTest, months };
+}
+
 /**
  * includeTestUsers: テストユーザーを含めた残高の記録（includesTestUsers=true の行）で計算する。
  * 含めた記録は 2026-11-12 から。経理の基準値（11/1）はテストユーザーを除いた値なので、含める側には使わない。
@@ -228,5 +250,33 @@ export async function loadBalances(months: string[], includeTestUsers = false): 
   const daily: DailyPurchase[] = purchaseRows.map((r) => ({ day: String(r.day), apple: n(r.apple), google: n(r.google), stripe: n(r.stripe), inappUnknown: n(r.inappUnknown) }));
   const reported = new Map(reportedRows.map((r) => [String(r.month), { apple: n(r.apple), google: n(r.google), stripe: n(r.stripe) }]));
   const purchases = monthlyFromDaily(daily, months).map((p) => ({ ...p, reported: reported.get(p.month) ?? null }));
-  return computeBalances(snapshots, purchases, months, new Date());
+  const result = computeBalances(snapshots, purchases, months, new Date());
+  if (!includeTestUsers || result.months.every((m) => m.revenue)) return result;
+  // 含める側で計算できない月を、除いた側＋テストユーザーの消費額で補う。
+  const [withoutTest, usageRows] = await Promise.all([
+    loadBalances(months, false),
+    run(`
+      -- test-users: only（テストユーザーの分だけを数える）
+      WITH v AS (
+        SELECT FORMAT_DATE("%Y-%m", DATE(TIMESTAMP_SUB(\`at\`, INTERVAL 2 HOUR), "Asia/Tokyo")) AS month,
+          IF(billedCoinVendor = "apple", ROUND(COALESCE(billedCoin, 0) * ${COIN_YEN}), 0) AS apple,
+          IF(billedCoinVendor = "google", ROUND(COALESCE(billedCoin, 0) * ${COIN_YEN}), 0) AS google,
+          COALESCE(revenue, 0) AS total
+        FROM ${t("visits_current_range")}(DATE(@from), CURRENT_DATE("Asia/Tokyo"), NULL)
+        WHERE COALESCE(isTestUser, FALSE) AND type NOT IN ("free", "trial", "reservation")
+      ), b AS (
+        SELECT FORMAT_DATE("%Y-%m", DATE(TIMESTAMP_SUB(\`at\`, INTERVAL 2 HOUR), "Asia/Tokyo")) AS month,
+          IF(coinVendor = "apple", ROUND(COALESCE(coin, 0) * ${COIN_YEN}), 0) AS apple,
+          IF(coinVendor = "google", ROUND(COALESCE(coin, 0) * ${COIN_YEN}), 0) AS google,
+          COALESCE(revenue, 0) AS total
+        FROM ${t("bookings_current")}
+        WHERE COALESCE(isTestUser, FALSE) AND NOT COALESCE(canceled, FALSE) AND DATE(\`at\`, "Asia/Tokyo") >= DATE(@from)
+      )
+      SELECT month, SUM(apple) AS apple, SUM(google) AS google, SUM(total) AS total FROM (SELECT * FROM v UNION ALL SELECT * FROM b) GROUP BY month`).catch(() => []),
+  ]);
+  const usage = new Map(usageRows.map((r) => {
+    const apple = n(r.apple), google = n(r.google), total = n(r.total);
+    return [String(r.month), { apple, google, stripe: total - apple - google, total }] as [string, PlatformYen];
+  }));
+  return fillWithTestUserEstimate(result, withoutTest, usage);
 }

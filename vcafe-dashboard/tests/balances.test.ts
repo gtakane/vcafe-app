@@ -78,3 +78,24 @@ test("前月は、購入額を各社の報告値で登録したときだけ確�
   assert.equal(result.months[0].revenue?.apple, 900);
   assert.ok(result.months[0].note.includes("各社の報告値"));
 });
+
+test("テストユーザーを含める側で計算できない月は、除いた売上＋テストユーザーの消費額で補い、暫定にする", async () => {
+  const { fillWithTestUserEstimate, TEST_USER_ESTIMATE_NOTE } = await import("../lib/balances.ts");
+  const yenOf = (apple: number, google: number, stripe: number) => ({ apple, google, stripe, total: apple + google + stripe });
+  const base = { openingAt: null, closingAt: null, purchase: null, opening: null, closing: null };
+  const withTest = { latest: null, monthEnds: [], months: [
+    { ...base, month: "2026-11", status: "missing" as const, note: "前月末の残高の記録がありません", revenue: null, revenueExcludingTax: null },
+    { ...base, month: "2026-12", status: "provisional" as const, note: "", revenue: yenOf(1, 2, 3), revenueExcludingTax: 5 },
+  ] };
+  const withoutTest = { latest: null, monthEnds: [], months: [
+    { ...base, month: "2026-11", status: "confirmed" as const, note: "購入額は各社の報告値", revenue: yenOf(500000, 100000, 2500000), revenueExcludingTax: 2818182 },
+    { ...base, month: "2026-12", status: "provisional" as const, note: "", revenue: yenOf(9, 9, 9), revenueExcludingTax: 25 },
+  ] };
+  const filled = fillWithTestUserEstimate(withTest, withoutTest, new Map([["2026-11", yenOf(1190, 0, 8500)]]));
+  const nov = filled.months[0];
+  assert.equal(nov.status, "provisional");
+  assert.deepEqual(nov.revenue, yenOf(501190, 100000, 2508500));
+  assert.ok(nov.note.startsWith(TEST_USER_ESTIMATE_NOTE));
+  // 含める側で計算できた月はそのまま
+  assert.deepEqual(filled.months[1].revenue, yenOf(1, 2, 3));
+});

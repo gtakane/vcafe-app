@@ -77,6 +77,7 @@ export interface Visit {
   billedCoinVendor?: string | null; // 消費したコインの購入元（apple / google）
   usedTicketCount?: number | null; // 1回のご帰宅で使ったチケット枚数（40分=2枚など）
   freeCheki?: number | null; // cheki のうち無料のもの（誕生日プレゼント等）。売上から除く
+  isTestUser?: boolean | null; // テストユーザーのご帰宅（2026-11-12 から取り込む。それより前の行は NULL）
 }
 
 /**

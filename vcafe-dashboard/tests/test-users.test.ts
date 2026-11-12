@@ -49,7 +49,7 @@ test("会員ごとの記録を読むクエリは、すべてテストユーザ�
     assert.ok(queries.length > 0, `${file}: クエリが見つかりません`);
     for (const query of queries) {
       if (!userTables.test(query)) continue;
-      assert.ok(/testUserCondition\(|tu\(|test-users: filtered-in-code/.test(query), `${file}: テストユーザーの条件が無いクエリ: ${query.slice(0, 120).replace(/\s+/g, " ")}`);
+      assert.ok(/testUserCondition\(|tu\(|test-users: filtered-in-code|test-users: only/.test(query), `${file}: テストユーザーの条件が無いクエリ: ${query.slice(0, 120).replace(/\s+/g, " ")}`);
     }
   }
 });
