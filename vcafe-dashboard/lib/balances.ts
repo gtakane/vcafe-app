@@ -145,7 +145,7 @@ export function purchaseYen(p: MonthlyPurchase): PlatformYen {
   return { apple, google, stripe, total: apple + google + stripe };
 }
 
-/** 月の確定売上。前月末と当月末の残高がそろった月は確定、当月は最新の記録で暫定。 */
+/** 月の確定売上。前月末と当月末の残高がそろい、購入額が各社の報告値の月は確定。当月（最新の記録で計算）と購入額が推定の月は暫定。 */
 export function computeBalances(snapshots: BalanceSnapshot[], purchases: MonthlyPurchase[], months: string[], now: Date): BalancesResult {
   const sorted = [...snapshots].sort((a, b) => a.snapshotAt.localeCompare(b.snapshotAt));
   const latestSnapshot = sorted.at(-1) ?? null;
@@ -173,7 +173,10 @@ export function computeBalances(snapshots: BalanceSnapshot[], purchases: Monthly
       p?.reported ? "購入額は各社の報告値" : "購入額は課金台帳からの推定（各社の報告値を登録すると経理と一致）",
       !p?.reported && p && p.inappUnknown > 0 ? "購入元未取得のアプリ内課金があります" : "",
     ].filter(Boolean);
-    return { ...base, status: month === currentMonth ? "provisional" : "confirmed", note: notes.join("・"), purchase, opening: o, closing: c, revenue, revenueExcludingTax: excludingTax(revenue.total) };
+    // 「確定」は月末残高がそろい、かつ購入額が各社の報告値の月だけ。
+    // 課金台帳からの推定（Google は 2026-10 で報告より約25%多かった）のままでは経理と一致しないため暫定とする。
+    const confirmed = month !== currentMonth && Boolean(p?.reported);
+    return { ...base, status: confirmed ? "confirmed" : "provisional", note: notes.join("・"), purchase, opening: o, closing: c, revenue, revenueExcludingTax: excludingTax(revenue.total) };
   });
 
   return { latest: latestSnapshot ? { snapshotAt: latestSnapshot.snapshotAt, ...valueSnapshot(latestSnapshot) } : null, monthEnds, months: result };

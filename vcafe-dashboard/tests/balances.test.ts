@@ -36,7 +36,7 @@ test("確定売上 = 購入額（Apple/Googleは手数料15%控除）＋前月�
   ];
   const result = computeBalances(snapshots, [{ month: "2026-11", apple: 1000, google: 0, stripe: 2000, inappUnknown: 0 }], ["2026-10", "2026-11"], new Date("2026-12-02T00:00:00Z"));
   const nov = result.months.find((m) => m.month === "2026-11")!;
-  assert.equal(nov.status, "confirmed");
+  assert.equal(nov.status, "provisional"); // 購入額が課金台帳からの推定のため
   assert.equal(nov.revenue?.apple, 850 + 1190 - 476);
   assert.equal(nov.revenue?.stripe, 2000 + (11000 + 1700) - (6600 + 850));
   assert.equal(result.months.find((m) => m.month === "2026-10")!.status, "missing"); // 10/1の記録が無い
@@ -68,4 +68,13 @@ test("Appleの会計月は暦月とずれる（2026年10月 = 9/27〜10/31、11�
 test("各社の報告値が登録された月は、課金台帳の推定ではなく報告値を購入額に使う", () => {
   assert.deepEqual(purchaseYen({ month: "2026-11", apple: 999999, google: 999999, stripe: 999999, inappUnknown: 0, reported: { apple: 673183, google: 188615, stripe: 2605010 } }),
     { apple: 673183, google: 188615, stripe: 2605010, total: 3466808 });
+});
+
+test("前月は、購入額を各社の報告値で登録したときだけ確定にする", () => {
+  const snapshots = [snap("2026-10-31T20:00:00Z", { rewardPoint: 1000 }), snap("2026-11-30T20:00:00Z", { rewardPoint: 400 })];
+  const reported = { month: "2026-11", apple: 1000, google: 0, stripe: 2000, inappUnknown: 0, reported: { apple: 900, google: 0, stripe: 2000 } };
+  const result = computeBalances(snapshots, [reported], ["2026-11"], new Date("2026-12-02T00:00:00Z"));
+  assert.equal(result.months[0].status, "confirmed");
+  assert.equal(result.months[0].revenue?.apple, 900);
+  assert.ok(result.months[0].note.includes("各社の報告値"));
 });
