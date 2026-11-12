@@ -54,7 +54,7 @@ function ConfirmedRevenue({ growth }: { growth: GrowthMetrics | null }) {
 /** ご帰宅数の内訳と数え方。合計ご帰宅数が何を数えているかを画面上で読めるようにする。 */
 function VisitCountPanel({ breakdown }: { breakdown: Totals["visitBreakdown"] }) {
   const rows: Array<[string, number, string]> = [
-    ["通常ご帰宅", breakdown.normal, `実回数 ${number.format(breakdown.normalVisits)}回。滞在時間÷20分（20分=1件、40分=2件、20分未満は0.5件）`],
+    ["通常ご帰宅", breakdown.normal, `実回数 ${number.format(breakdown.normalVisits)}回。滞在時間÷20分（20分=1件、40分=2件、20分未満は0.5件）。メイドお給仕ポータルの「ご帰宅枠数」はこの数（ポータルはテストユーザーを含む）`],
     ["予約ご帰宅", breakdown.reservation, "1回を1件"],
     ["お試しご帰宅", breakdown.trial, "1回を1件"],
     ["無料ご帰宅（3種）", breakdown.free, "無料ご帰宅券・新規ユーザー無料・新人メイド無料。1回を1件"],
