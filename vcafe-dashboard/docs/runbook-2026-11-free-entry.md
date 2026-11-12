@@ -106,7 +106,7 @@ cd ~/vcafe-app && git pull --ff-only
 | --- | --- |
 | 1 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step7-revenue-tables.sh`（列・テーブル・ビューの追加） |
 | 2 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step3-update-job-image.sh`（同期プログラムの差し替え） |
-| 3 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step4-backfill.sh 2026-04-01`（4月以降を1か月ずつ再取り込み＋予約・招待の初回取り込み） |
+| 3 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step4-backfill.sh 2026-10-01`（10月以降を1か月ずつ再取り込み＋予約・招待の初回取り込み。中断したら restore-sync.sh） |
 | 4 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/verify-revenue.sh 2026-10`（経理の10月と比較） |
 | 5 | `bash ~/vcafe-app/vcafe-dashboard/deploy-revision-tokyo.sh` → 検証用URLで確認 |
 | 6 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/promote-latest-canary.sh`（版の名前を写さずに切替） |
