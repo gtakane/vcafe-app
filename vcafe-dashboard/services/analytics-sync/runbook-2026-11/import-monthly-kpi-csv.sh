@@ -6,7 +6,13 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 CSV=${1:-}
-[[ -f "${CSV}" ]] || { echo "使い方: bash import-monthly-kpi-csv.sh ~/月次指標.csv"; exit 2; }
+if [[ ! -f "${CSV}" ]]; then
+  [[ -n "${CSV}" ]] && echo "ファイルが見つかりません: ${CSV}"
+  echo "使い方: bash import-monthly-kpi-csv.sh ~/monthly-kpi.csv（名前に空白があるときは \"\" で囲む）"
+  echo "ホームにあるCSV:"
+  ls -1 ~/*.csv 2>/dev/null | sed 's/^/  /' || echo "  （ありません。Cloud Shell の「︙」→「アップロード」で送ってください）"
+  exit 2
+fi
 WORK=$(mktemp -d); trap 'rm -rf "${WORK}"' EXIT
 python3 "${HERE}/monthly-kpi-csv.py" "${CSV}" "${WORK}/rows.ndjson" "${WORK}/schema.json"
 confirm "上の内容で monthly_kpi_history を入れ替えます。"
