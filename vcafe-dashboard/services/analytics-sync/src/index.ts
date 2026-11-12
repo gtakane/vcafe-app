@@ -1,6 +1,6 @@
 import { BigQuery } from "@google-cloud/bigquery";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
-import { getFirestore, Timestamp } from "firebase-admin/firestore";
+import { FieldPath, getFirestore, Timestamp } from "firebase-admin/firestore";
 import { loadSyncConfig } from "./config.ts";
 import { fetchAllPages, type PageCursor } from "./paging.ts";
 import { buildSyncWindows } from "./windows.ts";
@@ -8,7 +8,7 @@ import { assertRejectRate, mapSafely, type RejectEntry } from "./safe-map.ts";
 import { validateRows } from "./row-validation.ts";
 import { assertLiveSchema, liveColumnsSql, type LiveColumn } from "./schema-precheck.ts";
 import { looksLikeMissingColumn, summarizeInsertErrors } from "./insert-errors.ts";
-import { buildMaidDirectory, mapCheki, pseudonymizeCustomerId, recordKeyOf, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
+import { buildMaidDirectory, mapBooking, mapCheki, pseudonymizeCustomerId, recordKeyOf, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
 import { rowInsertId } from "./row-insert-id.ts";
 import { excludedMaidIdsFrom, withoutExcludedMaids } from "./excluded-maids.ts";
 
@@ -405,6 +405,54 @@ async function syncMaidReports() {
   console.info(JSON.stringify({ maidReports: { profiles: profiles.length, monthly: monthly.length } }));
 }
 
+// 予約・招待（userReservations / userInvitations）を全件スナップショット同期する。
+// 期間指定の collection group 索引が本番に無く、キャンセルで後から更新もされるため、
+// 窓ごとの差分ではなく1日1回すべてを読み直す（件数は数千件規模）。
+async function readWholeGroup(group: string): Promise<SourceDocument[]> {
+  const documents: SourceDocument[] = [];
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+  for (;;) {
+    let query = sourceDb.collectionGroup(group).orderBy(FieldPath.documentId()).limit(config.pageSize);
+    if (cursor) query = query.startAfter(cursor);
+    const snapshot = await query.get();
+    for (const document of snapshot.docs) {
+      documents.push({ id: document.id, parentId: document.ref.parent.parent?.id, path: document.ref.path, data: document.data(), updatedAt: document.updateTime.toDate().toISOString() });
+    }
+    if (documents.length >= config.maxDocuments) throw new Error(`${group} の件数が上限(MAX_DOCUMENTS=${config.maxDocuments})に達しました`);
+    if (snapshot.size < config.pageSize) break;
+    cursor = snapshot.docs[snapshot.docs.length - 1];
+  }
+  return documents;
+}
+
+async function syncBookings() {
+  const [reservations, invitations] = await Promise.all([readWholeGroup("userReservations"), readWholeGroup("userInvitations")]);
+  const parentIds = [...new Set([...reservations, ...invitations].map((d) => d.parentId).filter((id): id is string => Boolean(id)))];
+  const users = await readUsers(parentIds);
+  // テストユーザーの予約・招待は取り込まない（ご帰宅・課金と同じ扱い）。
+  const excludedUsers = new Set(users.filter((document) => !mapUser(document, config.hmacSecret)).map((document) => document.id));
+  const maidMap = await loadMaidDirectory();
+  const rows = [
+    ...reservations.filter((d) => !excludedUsers.has(d.parentId || "")).map((d) => mapBooking(d, "reservation", config.hmacSecret, maidMap)),
+    ...invitations.filter((d) => !excludedUsers.has(d.parentId || "")).map((d) => mapBooking(d, "invitation", config.hmacSecret, maidMap)),
+  ].filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const kept = withoutExcludedMaids(rows, excludedMaids, (r) => r.maidId ?? "");
+  await insertRows("bookings_raw", kept.map((row) => ({ ...row, syncedAt, runId })));
+  console.info(JSON.stringify({ bookings: { reservations: reservations.length, invitations: invitations.length, inserted: kept.length, excludedTestUsers: excludedUsers.size } }));
+}
+
+// 予約・招待の取り込み頻度。既定は1日1回（BOOKINGS_HOUR_JST、既定5時）。
+//   BOOKINGS=always … 毎回取り込む（初回・確認時）
+//   BOOKINGS=never  … 取り込まない
+function shouldSyncBookings(): boolean {
+  const mode = (process.env.BOOKINGS || "").trim().toLowerCase();
+  if (mode === "never") return false;
+  if (mode === "always") return true;
+  const hour = Number(process.env.BOOKINGS_HOUR_JST ?? 5);
+  const jstHour = new Date(Date.now() + 9 * 3600000).getUTCHours();
+  return Number.isInteger(hour) ? jstHour === hour : true;
+}
+
 // users を全件スナップショット同期する（ユーザーDBを「来店のあった人」だけでなく全会員にする）。
 // 件数が多いためドキュメントID順にページングし、1000件ずつ挿入する。
 async function syncAllUsers() {
@@ -455,6 +503,12 @@ if (shouldSyncMaidReports()) {
   await syncMaidReports();
 } else {
   console.info("MAID_REPORTS_SKIPPED 本番の読み取り負荷を抑えるため今回は月次レポートを同期しません");
+}
+
+if (shouldSyncBookings()) {
+  await syncBookings();
+} else {
+  console.info("BOOKINGS_SKIPPED 予約・招待は1日1回（BOOKINGS_HOUR_JST）のみ同期します");
 }
 
 // 全会員の同期（SYNC_ALL_USERS=true のときのみ）。初回およびユーザー属性を最新化したいときに使う。

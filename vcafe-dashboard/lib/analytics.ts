@@ -1,8 +1,17 @@
-import type { AnalyticsData, Customer, Granularity, Viewer, ViewerScopedData, Visit } from "./types";
+import type { AnalyticsData, Booking, Customer, Granularity, Viewer, ViewerScopedData, Visit } from "./types";
 import {
+  addRevenueParts,
   businessDateJst,
   CHEKI_PRICE,
+  coinParts,
   countFreeKinds,
+  EMPTY_REVENUE_PARTS,
+  excludingTax,
+  paidChekiCount,
+  type RevenueParts,
+  totalOfParts,
+  visitRevenueParts,
+  visitTotalRevenue,
   isFree,
   isPaid,
   shiftActualHours,
@@ -81,6 +90,10 @@ export function scopeDataForViewer(data: AnalyticsData, viewer: Viewer): Analyti
     rankBreakdown: [...rankCounts.entries()].map(([rank, customers]) => ({ rank, customers })),
     visits: visits.map((visit) => ({ ...visit, customerId: aliases.get(visit.customerId)! })),
     shifts,
+    // 予約・招待は自分宛てのものだけ。顧客IDはご帰宅と同じ別名に置き換え、ご帰宅の無い顧客は伏せる。
+    bookings: (data.bookings || [])
+      .filter((booking) => booking.maidId === maidId)
+      .map((booking) => ({ ...booking, customerId: aliases.get(booking.customerId) ?? "非表示" })),
   };
 }
 
@@ -95,6 +108,7 @@ export function filterData<T extends ViewerScopedData>(data: T, viewer: Viewer, 
   };
   const visits = data.visits.filter((v) => inRange(v.at) && (!maidId || v.maidId === maidId));
   const shifts = data.shifts.filter((s) => inRange(s.scheduledStart) && (!maidId || s.maidId === maidId));
+  const bookings = data.bookings?.filter((b) => inRange(b.at) && (!maidId || b.maidId === maidId));
   const visibleMaidIds = maidId ? new Set([maidId]) : new Set(data.maids.map((m) => m.id));
   const visibleCustomerIds = new Set(visits.map((v) => v.customerId));
   return {
@@ -103,12 +117,37 @@ export function filterData<T extends ViewerScopedData>(data: T, viewer: Viewer, 
     customers: data.customers.filter((u) => visibleCustomerIds.has(u.id)),
     visits,
     shifts,
+    ...(bookings ? { bookings } : {}),
   };
 }
 
+/** ご帰宅・予約・招待を合わせた売上の内訳（税込）。 */
+export function revenueBreakdown(visits: Visit[], bookings: Booking[] = []): RevenueParts & { total: number; bookings: number; excludingTax: number } {
+  let parts = { ...EMPTY_REVENUE_PARTS };
+  for (const visit of visits) {
+    parts = addRevenueParts(parts, { ...visitRevenueParts(visit), cheki: paidChekiCount(visit) * CHEKI_PRICE });
+  }
+  let bookingTotal = 0;
+  for (const booking of bookings) {
+    if (booking.canceled) continue;
+    const p = coinParts(booking.coin, booking.coinVendor, booking.rewardPoint);
+    parts = addRevenueParts(parts, p);
+    bookingTotal += totalOfParts(p);
+  }
+  const total = totalOfParts(parts);
+  return { ...parts, total, bookings: bookingTotal, excludingTax: excludingTax(total) };
+}
+
+const bookingRevenue = (bookings: Booking[] | undefined) => (bookings || []).reduce((sum, b) => sum + (b.canceled ? 0 : b.revenue), 0);
+
 export function summarize(data: ViewerScopedData) {
   // 売上・ご帰宅数はcore.pyと一致させる（チェキ単価は定数、ご帰宅数・有料数は重み付き）。
-  const revenue = data.visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0);
+  // 売上（税込）= ご帰宅（有料チェキ含む）＋予約・招待。単価は経理の計上ロジックに合わせている（metrics.ts）。
+  // 合計は推移・メイド別と同じく visit.revenue から出し、内訳は明細項目から出す。
+  // 両者が食い違う（明細項目の無い古い行など）場合の差は「その他」として見えるようにする。
+  const revenue = data.visits.reduce((sum, v) => sum + visitTotalRevenue(v), 0) + bookingRevenue(data.bookings);
+  const breakdown = revenueBreakdown(data.visits, data.bookings);
+  const revenueParts = { ...breakdown, other: revenue - breakdown.total, total: revenue, excludingTax: excludingTax(revenue) };
   const customerCount = new Set(data.visits.map((v) => v.customerId)).size;
   const paid = weightedPaidCount(data.visits);
   const cheki = data.visits.reduce((sum, v) => sum + v.cheki, 0);
@@ -117,7 +156,7 @@ export function summarize(data: ViewerScopedData) {
   // 無料枠（お試し＋11/6以降の無料3種）。内訳は実件数（無料ご帰宅は10分/20分で重み1のため件数と一致）。
   const freeKinds = countFreeKinds(data.visits);
   const free = data.visits.filter((v) => isFree(v.type)).length;
-  return { visits: weightedVisitCount(data.visits), revenue, customerCount, paid, free, freeKinds, cheki, workHours: workMinutes / 60, lateMinutes };
+  return { visits: weightedVisitCount(data.visits), revenue, revenueParts, customerCount, paid, free, freeKinds, cheki, workHours: workMinutes / 60, lateMinutes };
 }
 
 function bucketKey(at: string, granularity: Granularity) {
@@ -139,14 +178,24 @@ function bucketKey(at: string, granularity: Granularity) {
   return `${mm}/${dd}`;
 }
 
-export function buildTrend(visits: Visit[], granularity: Granularity) {
+export function buildTrend(visits: Visit[], granularity: Granularity, bookings: Booking[] = []) {
   const map = new Map<string, { label: string; visits: number; revenue: number; sortAt: number }>();
   visits.forEach((visit) => {
     const label = bucketKey(visit.at, granularity);
     const at = new Date(visit.at).getTime();
     const current = map.get(label) || { label, visits: 0, revenue: 0, sortAt: at };
     current.visits += visit.weight ?? 1;
-    current.revenue += visit.revenue + visit.cheki * CHEKI_PRICE;
+    current.revenue += visitTotalRevenue(visit);
+    current.sortAt = Math.min(current.sortAt, at);
+    map.set(label, current);
+  });
+  // 予約・招待の売上は予約を受けた日に計上する（ご帰宅数には数えない）。
+  bookings.forEach((booking) => {
+    if (booking.canceled || !booking.revenue) return;
+    const label = bucketKey(booking.at, granularity);
+    const at = new Date(booking.at).getTime();
+    const current = map.get(label) || { label, visits: 0, revenue: 0, sortAt: at };
+    current.revenue += booking.revenue;
     current.sortAt = Math.min(current.sortAt, at);
     map.set(label, current);
   });
@@ -159,7 +208,7 @@ export function maidRows(data: ViewerScopedData) {
     const visits = data.visits.filter((v) => v.maidId === maid.id);
     const shifts = data.shifts.filter((s) => s.maidId === maid.id);
     const users = new Set(visits.map((v) => v.customerId)).size;
-    const revenue = visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0);
+    const revenue = visits.reduce((sum, v) => sum + visitTotalRevenue(v), 0) + bookingRevenue(data.bookings?.filter((b) => b.maidId === maid.id));
     const cheki = visits.reduce((sum, v) => sum + v.cheki, 0);
     const workHours = shifts.reduce((sum, s) => sum + shiftActualHours(s), 0);
     // 平均ご帰宅数(件/h)は予約を除いた重み付き件数 / 稼働時間（core.py: non_rsv_weight / 稼働時間数）。
@@ -187,7 +236,7 @@ export function customerRows(data: ViewerScopedData) {
     const favorite = data.maids
       .map((maid) => ({ name: maid.name, count: weightedVisitCount(visits.filter((v) => v.maidId === maid.id)) }))
       .sort((a, b) => b.count - a.count)[0];
-    const spend = visits.reduce((sum, v) => sum + v.revenue + v.cheki * CHEKI_PRICE, 0);
+    const spend = visits.reduce((sum, v) => sum + visitTotalRevenue(v), 0) + bookingRevenue(data.bookings?.filter((b) => b.customerId === customer.id));
     return {
       ...customer,
       rank: customer.rank ?? "非表示",

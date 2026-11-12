@@ -86,3 +86,29 @@ cd ~/vcafe-app && git pull --ff-only
 削除は分析用BigQueryのみで、元データは本番に残るため、設定を外して再取り込みすれば戻せる。
 
 > `deploy-disabled-job-tokyo.sh` で環境変数を置き換えると `EXCLUDED_MAID_IDS` も消える。
+
+## 第2段階: 売上を経理の計上ロジックの単価に合わせる
+
+単価は経理資料「Vあっと売上計上関連（経営管理報告用）」の未使用残高の円換算と同じ。
+
+| 対象 | 単価（税込） |
+| --- | --- |
+| Apple/Googleコイン | 1.19円（1.4円からストア手数料15%を控除） |
+| リワードポイント（ウェブコイン等） | 1.1円 |
+| ご帰宅チケット / プレミアム / ランダム | 850円 / 960円 / 650円 × 使用枚数 |
+| 記念撮影 | 500円（誕生日プレゼント等の無料チェキは除く） |
+| 予約・招待 | 予約・招待を受けた時点で消費したコイン・ポイント（ご帰宅側は0円） |
+
+アイテム購入・有効期限切れ・無償付与は含まないため、月の確定売上（経理）とは一致しない。
+2026年10月の検証では、ご帰宅・予約・招待の合計は経理の約97%（Apple/Googleはアイテム購入分だけ不足）。
+
+| 手順 | コマンド |
+| --- | --- |
+| 1 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step7-revenue-tables.sh`（列・テーブル・ビューの追加） |
+| 2 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step3-update-job-image.sh`（同期プログラムの差し替え） |
+| 3 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step4-backfill.sh 2026-04-01`（4月以降を1か月ずつ再取り込み＋予約・招待の初回取り込み） |
+| 4 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/verify-revenue.sh 2026-10`（経理の10月と比較） |
+| 5 | `bash ~/vcafe-app/vcafe-dashboard/deploy-revision-tokyo.sh` → 検証用URLで確認 |
+| 6 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/promote-latest-canary.sh`（版の名前を写さずに切替） |
+
+> 手順1を飛ばして手順2以降を行うと、同期は起動時の列照合で停止し、ダッシュボードは表示時にエラーになる。

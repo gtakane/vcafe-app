@@ -2,8 +2,9 @@
 //
 // 既存Streamlit実装 `core.py` と「同じ本番データから同じ数値」を出すことを目的とする。
 // 対応関係（core.py → 本ファイル）:
-//   TICKET_PRICES / RESERVATION_PRICE / CHEKI_PRICE / 係数1.4  → 下記定数
-//   _calc_revenue                                            → visitRevenue()
+//   TICKET_PRICES / RESERVATION_PRICE / CHEKI_PRICE / 係数1.4  → LEGACY_TICKET_PRICES ほか
+//   _calc_revenue                                            → legacyVisitRevenue()
+//     ※2026-11以降、ダッシュボードの売上は経理の計上ロジックに合わせた visitRevenue() を使う（下記）。
 //   _classify_type（無料=trialのみ, それ以外=有料）           → classifyVisit() / isPaid()
 //     ※2026-11-06以降の無料ご帰宅3種（isFreeEntry/entryType）は本ファイル側でのみ判定している。
 //       core.py（Streamlit版）は未対応のため、11/6以降の有料件数はStreamlit版と一致しない。
@@ -22,13 +23,30 @@ export const SEATS_PER_MAID = 3;
 export const SLOTS_PER_HOUR = 3; // 60分 / 20分
 export const CAPACITY_PER_MAID_HOUR = SEATS_PER_MAID * SLOTS_PER_HOUR; // = 9
 
+// ---------------------------------------------------------------------------
+// 売上の単価（2026-11〜）。経理の計上ロジック「Vあっと売上計上関連（経営管理報告用）」と同じ円換算。
+//   売上 = 購入額 + 前月末の未使用残高 − 当月末の未使用残高（税込）であり、未使用残高は次の単価で円換算される。
+//   - Apple/Googleコイン … 1.19円（1.4円からストア手数料15%を控除した額）
+//   - リワードポイント   … 1.1円（Stripeで購入したウェブコイン等）
+//   - チケット           … ご帰宅850円 / プレミアム960円 / ランダム650円 / 記念撮影500円
+// ご帰宅単位の売上はこの単価で「消費額」を出したもの。アイテム購入・失効・無償付与は含まれないため、
+// 月の確定値は経理と同じ残高の差し引きで別途出す。
+// ---------------------------------------------------------------------------
 export const TICKET_PRICES: Record<string, number> = {
-  gokitaku30minutes: 840,
+  gokitaku30minutes: 850,
   premiumGokitaku1: 960,
   luckyGokitaku: 650,
 };
-export const RESERVATION_PRICE = 3920;
 export const CHEKI_PRICE = 500;
+export const COIN_YEN = 1.19; // Apple/Googleコイン1枚の円換算（手数料控除後）
+export const REWARD_POINT_YEN = 1.1; // リワードポイント1点の円換算
+// 無料のチェキ（売上にしない）。userAlbum.type の値。
+export const FREE_CHEKI_TYPES = new Set(["birthdayGift", "birthdayGiftSigned"]);
+export const TAX_RATE = 0.1;
+
+// 旧定義（core.py との互換用。Streamlit版は引き続きこの値で計算している）。
+export const LEGACY_TICKET_PRICES: Record<string, number> = { gokitaku30minutes: 840, premiumGokitaku1: 960, luckyGokitaku: 650 };
+export const RESERVATION_PRICE = 3920;
 export const COIN_TO_YEN = 1.4; // フォールバック係数（core.py と一致）
 // お試しご帰宅（従来からある10分無料）。チケットIDで判定する。
 export const FREE_TICKET_IDS = new Set(["trial10minutes"]);
@@ -82,12 +100,85 @@ export function classifyVisit(ticketId: string, roomType: string, entry: FreeEnt
   return "paid";
 }
 
-/** 収益。core.py _calc_revenue と一致（予約=3920、既知チケット=定価、他=round((coin+reward)*1.4)）。 */
-export function visitRevenue(type: VisitType, ticketId: string, billedCoin: number, billedReward: number): number {
+/** 旧定義の収益。core.py _calc_revenue と一致（予約=3920、既知チケット=定価840等、他=round((coin+reward)*1.4)）。 */
+export function legacyVisitRevenue(type: VisitType, ticketId: string, billedCoin: number, billedReward: number): number {
   if (type === "trial" || type === "free") return 0;
   if (type === "reservation") return RESERVATION_PRICE;
-  if (ticketId in TICKET_PRICES) return TICKET_PRICES[ticketId];
+  if (ticketId in LEGACY_TICKET_PRICES) return LEGACY_TICKET_PRICES[ticketId];
   return Math.round((billedCoin + billedReward) * COIN_TO_YEN);
+}
+
+/** 売上の内訳（税込・円）。Stripe側 = rewardPoint + ticket + cheki。 */
+export interface RevenueParts {
+  apple: number; // Appleコイン
+  google: number; // Googleコイン
+  coinUnknown: number; // 購入元を取得していない古い行のコイン（Apple/Googleどちらも1.19円なので合計は正しい）
+  rewardPoint: number; // リワードポイント（ウェブコイン等）
+  ticket: number; // チケット
+  cheki: number; // 有料の記念撮影
+}
+
+export const EMPTY_REVENUE_PARTS: RevenueParts = { apple: 0, google: 0, coinUnknown: 0, rewardPoint: 0, ticket: 0, cheki: 0 };
+
+export function addRevenueParts(a: RevenueParts, b: RevenueParts): RevenueParts {
+  return {
+    apple: a.apple + b.apple, google: a.google + b.google, coinUnknown: a.coinUnknown + b.coinUnknown,
+    rewardPoint: a.rewardPoint + b.rewardPoint, ticket: a.ticket + b.ticket, cheki: a.cheki + b.cheki,
+  };
+}
+
+export function totalOfParts(parts: RevenueParts): number {
+  return parts.apple + parts.google + parts.coinUnknown + parts.rewardPoint + parts.ticket + parts.cheki;
+}
+
+/** コイン・リワードポイントの消費を購入元別の円に振り分ける（ご帰宅・予約・招待で共通）。 */
+export function coinParts(coin: number, coinVendor: string | null | undefined, rewardPoint: number): RevenueParts {
+  const coinYen = Math.round((Number(coin) || 0) * COIN_YEN);
+  return {
+    ...EMPTY_REVENUE_PARTS,
+    apple: coinVendor === "apple" ? coinYen : 0,
+    google: coinVendor === "google" ? coinYen : 0,
+    coinUnknown: coinVendor === "apple" || coinVendor === "google" ? 0 : coinYen,
+    rewardPoint: Math.round((Number(rewardPoint) || 0) * REWARD_POINT_YEN),
+  };
+}
+
+/**
+ * ご帰宅1件の売上の内訳（記念撮影を除く）。
+ *   無料枠 … 0円
+ *   予約   … 0円（コインは予約時に消費され、予約(userReservations)側で計上する。二重計上しない）
+ *   チケット … 単価 × 使用枚数（40分=2枚など。枚数が未取得の古い行は1枚）
+ *   コイン・リワードポイント … 消費量 × 単価（チケットと併用された場合も加算する）
+ */
+export function visitRevenueParts(visit: Pick<Visit, "type" | "ticketId" | "billedCoin" | "billedCoinVendor" | "billedRewardPoint" | "usedTicketCount">): RevenueParts {
+  if (visit.type === "trial" || visit.type === "free" || visit.type === "reservation") return { ...EMPTY_REVENUE_PARTS };
+  const ticketId = visit.ticketId || "";
+  const count = visit.usedTicketCount == null ? 1 : Number(visit.usedTicketCount) || 0;
+  const ticket = ticketId in TICKET_PRICES ? TICKET_PRICES[ticketId] * count : 0;
+  return { ...coinParts(visit.billedCoin ?? 0, visit.billedCoinVendor, visit.billedRewardPoint ?? 0), ticket };
+}
+
+/** ご帰宅1件の売上（記念撮影を除く・税込・円）。同期時に visits_raw.revenue へ保存する値。 */
+export function visitRevenue(
+  type: VisitType, ticketId: string, billedCoin: number, billedReward: number,
+  usedTicketCount?: number | null, billedCoinVendor?: string | null,
+): number {
+  return totalOfParts(visitRevenueParts({ type, ticketId, billedCoin, billedRewardPoint: billedReward, usedTicketCount, billedCoinVendor }));
+}
+
+/** 有料の記念撮影の枚数（誕生日プレゼント等の無料チェキを除く）。 */
+export function paidChekiCount(visit: Pick<Visit, "cheki" | "freeCheki">): number {
+  return Math.max(0, (visit.cheki ?? 0) - (visit.freeCheki ?? 0));
+}
+
+/** ご帰宅1件の売上（記念撮影を含む）。画面の売上集計はすべてこの関数を通す。 */
+export function visitTotalRevenue(visit: Pick<Visit, "revenue" | "cheki" | "freeCheki">): number {
+  return (visit.revenue ?? 0) + paidChekiCount(visit) * CHEKI_PRICE;
+}
+
+/** 税込の金額から税抜（10%）を出す。経理資料と同じく四捨五入。 */
+export function excludingTax(amount: number): number {
+  return Math.round(amount / (1 + TAX_RATE));
 }
 
 /** 有料判定。有料=無料枠（お試し・無料3種）以外。予約も有料に含む。 */

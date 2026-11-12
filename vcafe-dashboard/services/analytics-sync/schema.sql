@@ -82,6 +82,30 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.cheki_raw` (
 PARTITION BY DATE(`at`)
 CLUSTER BY maidId, customerId;
 
+-- users/{id}/userReservations・userInvitations = 予約・招待（2026-11追加）。
+-- コインは予約・招待の時点で消費されるため、at（reservedDate / acceptedDate）を売上の計上日時とする。
+-- 件数が少なく期間指定の索引も無いため、1日1回の全件スナップショットで取り込む（syncBookings）。
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.bookings_raw` (
+  id STRING NOT NULL,
+  kind STRING NOT NULL,
+  customerId STRING NOT NULL,
+  maidId STRING,
+  `at` TIMESTAMP NOT NULL,
+  slotAt TIMESTAMP,
+  coin FLOAT64,
+  coinVendor STRING,
+  rewardPoint FLOAT64,
+  canceled BOOL,
+  refundedYen FLOAT64,
+  revenue INT64,
+  recordKey STRING NOT NULL,
+  runId STRING,
+  syncedAt TIMESTAMP NOT NULL,
+  sourceUpdatedAt TIMESTAMP
+)
+PARTITION BY DATE(`at`)
+CLUSTER BY maidId, customerId;
+
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.shifts_raw` (
   id STRING NOT NULL,
   maidId STRING NOT NULL,
@@ -218,6 +242,10 @@ ALTER TABLE `PROJECT_ID.DATASET_ID.visits_raw`
   ADD COLUMN IF NOT EXISTS minutes FLOAT64,
   ADD COLUMN IF NOT EXISTS billedCoin FLOAT64,
   ADD COLUMN IF NOT EXISTS billedRewardPoint FLOAT64;
+
+-- 誕生日プレゼント等の無料チェキを売上から除くため、userAlbum.type を保持する（2026-11追加）。
+ALTER TABLE `PROJECT_ID.DATASET_ID.cheki_raw`
+  ADD COLUMN IF NOT EXISTS chekiType STRING;
 
 -- 2026-11-06 から始まった無料ご帰宅3種の判定と、売上を計上ロジックに合わせるための明細列。
 --   entryType        … freeTicket / newUserFree / freshMaidFree（有料・お試しは NULL）
@@ -497,6 +525,15 @@ CREATE OR REPLACE TABLE FUNCTION `PROJECT_ID.DATASET_ID.visits_current_range`(st
     ON c.customerId = v.customerId AND c.maidId = v.maidId AND c.business_date = DATE(TIMESTAMP_SUB(v.`at`, INTERVAL 2 HOUR), "Asia/Tokyo")
   WHERE DATE(TIMESTAMP_SUB(v.`at`, INTERVAL 2 HOUR), "Asia/Tokyo") BETWEEN start_date AND end_date
 );
+
+-- 予約・招待の最新状態（キャンセル等で更新されるため recordKey ごとに最新の1行）。
+CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.bookings_current` AS
+SELECT * EXCEPT(row_number)
+FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY recordKey ORDER BY COALESCE(sourceUpdatedAt, syncedAt) DESC, syncedAt DESC, runId DESC) AS row_number
+  FROM `PROJECT_ID.DATASET_ID.bookings_raw`
+)
+WHERE row_number = 1;
 
 -- 同期の鮮度。UIの「最終同期」表示に使う。
 CREATE OR REPLACE VIEW `PROJECT_ID.DATASET_ID.sync_watermark` AS

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildMaidMap, mapPayment, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, pseudonymizeCustomerId } from "../src/transform.ts";
+import { buildMaidMap, mapBooking, mapCheki, mapPayment, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, pseudonymizeCustomerId } from "../src/transform.ts";
 
 const secret = "0123456789abcdef0123456789abcdef";
 const timestamp = (iso: string) => ({ toDate: () => new Date(iso) });
@@ -19,10 +19,10 @@ test("maps and pseudonymizes a confirmed user document", () => {
   assert.notEqual(user?.id, "user-1");
 });
 
-test("maps a paid visit with the known ticket price", () => {
-  const visit = mapVisit({ id: "visit-1", parentId: "user-1", data: { enterDateTime: timestamp("2026-07-21T10:00:00Z"), maidNickname: "こはる", usedTicketItemId: "gokitaku30minutes", billedCoin: 600 } }, secret, new Map([["こはる", "maid-1"]]));
+test("maps a paid visit with the known ticket price（経理単価: ご帰宅チケット850円）", () => {
+  const visit = mapVisit({ id: "visit-1", parentId: "user-1", data: { enterDateTime: timestamp("2026-07-21T10:00:00Z"), maidNickname: "こはる", usedTicketItemId: "gokitaku30minutes", billedCoin: 0 } }, secret, new Map([["こはる", "maid-1"]]));
   assert.equal(visit?.maidId, "maid-1");
-  assert.equal(visit?.revenue, 840);
+  assert.equal(visit?.revenue, 850);
   assert.equal(visit?.type, "paid");
   assert.equal(visit?.weight, 1); // initialTime未設定 → 既定20 → 重み1
 });
@@ -42,7 +42,7 @@ test("classifies a zero-coin non-trial visit as paid, not free", () => {
 test("classifies reservation and trial visits", () => {
   const reservation = mapVisit({ id: "visit-4", parentId: "user-1", data: { maidId: "maid-1", enterDateTime: timestamp("2026-07-21T10:00:00Z"), roomType: "reservation", usedTicketItemId: "gokitaku30minutes" } }, secret, new Map());
   assert.equal(reservation?.type, "reservation");
-  assert.equal(reservation?.revenue, 3920);
+  assert.equal(reservation?.revenue, 0); // 予約のコインは予約時に消費され、bookings_raw 側で計上する
   const trial = mapVisit({ id: "visit-5", parentId: "user-1", data: { maidId: "maid-1", enterDateTime: timestamp("2026-07-21T10:00:00Z"), usedTicketItemId: "trial10minutes" } }, secret, new Map());
   assert.equal(trial?.type, "trial");
   assert.equal(trial?.revenue, 0);
@@ -208,4 +208,37 @@ test("新しい列は schema manifest に登録されている（未登録だと
   assert.equal(cols.entryType, "STRING");
   assert.equal(cols.billedCoinVendor, "STRING");
   assert.equal(cols.usedTicketCount, "INT64");
+});
+
+
+test("ご帰宅の売上は使用チケット枚数とコインの購入元で計算する", () => {
+  const twoTickets = mapVisit({ id: "v-2t", parentId: "user-1", data: { maidId: "maid-1", enterDateTime: timestamp("2026-11-07T11:00:00Z"), usedTicketItemId: "gokitaku30minutes", usedTicketCount: 2, initialTime: 40 } }, secret, new Map());
+  assert.equal(twoTickets?.revenue, 1700);
+  const coin = mapVisit({ id: "v-c", parentId: "user-1", data: { maidId: "maid-1", enterDateTime: timestamp("2026-11-07T11:00:00Z"), usedTicketItemId: "ATCOIN", billedCoin: 1000, billedCoinVendor: "google", billedRewardPoint: 100 } }, secret, new Map());
+  assert.equal(coin?.revenue, 1190 + 110);
+});
+
+test("mapCheki: 無料チェキの判定用に userAlbum.type を保持する", () => {
+  const row = mapCheki({ id: "c-1", parentId: "user-1", data: { maidId: "maid-1", date: timestamp("2026-10-10T11:00:00Z"), type: "birthdayGift" } }, secret, new Map(), "2026-11-12T00:00:00Z");
+  assert.equal(row?.chekiType, "birthdayGift");
+  const normal = mapCheki({ id: "c-2", parentId: "user-1", data: { maidId: "maid-1", date: timestamp("2026-10-10T11:00:00Z") } }, secret, new Map(), "2026-11-12T00:00:00Z");
+  assert.equal(normal?.chekiType, null);
+});
+
+test("mapBooking: 予約は予約日時に、消費コイン×1.19円＋リワードP×1.1円で計上し、キャンセルは0円", () => {
+  const maidMap = new Map([["こはる", "maid-1"]]);
+  const r = mapBooking({ id: "r-1", parentId: "user-1", path: "users/user-1/userReservations/r-1", data: { reservedDate: timestamp("2026-10-05T03:00:00Z"), openTime: timestamp("2026-10-10T10:00:00Z"), maidNickname: "こはる", purchasedCoin: 2800, purchasedCoinVendor: "apple", purchasedRewardPoint: 0 } }, "reservation", secret, maidMap);
+  assert.equal(r?.at, "2026-10-05T03:00:00.000Z");
+  assert.equal(r?.maidId, "maid-1");
+  assert.equal(r?.coinVendor, "apple");
+  assert.equal(r?.revenue, Math.round(2800 * 1.19));
+  assert.equal(r?.canceled, false);
+  const canceled = mapBooking({ id: "r-2", parentId: "user-1", path: "users/user-1/userReservations/r-2", data: { reservedDate: timestamp("2026-10-05T03:00:00Z"), canceledDate: timestamp("2026-10-06T03:00:00Z"), purchasedRewardPoint: 2800 } }, "reservation", secret, maidMap);
+  assert.equal(canceled?.canceled, true);
+  assert.equal(canceled?.revenue, 0);
+  const inv = mapBooking({ id: "i-1", parentId: "user-2", path: "users/user-2/userInvitations/i-1", data: { acceptedDate: timestamp("2026-10-07T03:00:00Z"), maidNickname: "不明", purchasedCoin: 1000, purchasedCoinVendor: "google" } }, "invitation", secret, maidMap);
+  assert.equal(inv?.kind, "invitation");
+  assert.equal(inv?.maidId, null); // 名簿で解決できなくても売上は落とさない
+  assert.equal(inv?.revenue, 1190);
+  assert.notEqual(inv?.recordKey, r?.recordKey);
 });

@@ -3,7 +3,10 @@
 # 本番Firestoreは読み取りのみ。BigQuery は追記のみで、新しい行が採用されるため二重計上にはならない。
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-FROM=2026-10-15
+# 使い方: bash step4-backfill.sh [開始日 YYYY-MM-DD]（既定 2026-10-15）
+#   期間が長い場合は1か月ずつ区切って実行する（1回の実行時間の上限に掛からないようにするため）。
+#   あわせて予約・招待（bookings）も1回取り込む。
+FROM=${1:-2026-10-15}
 TO=$(date -u -d tomorrow +%F)
 
 # 同期ジョブのプログラムが、無料判定の変更（cc8f291）を含むコミットから作られているか確認する。
@@ -11,6 +14,10 @@ CURRENT=$(current_job_image)
 TAG="${CURRENT##*:}"
 if [[ -z "${CURRENT}" ]] || ! git -C "${DASHBOARD_DIR}" merge-base --is-ancestor cc8f291 "${TAG}" 2>/dev/null; then
   echo "同期ジョブがまだ新しいプログラムになっていません（現在: ${CURRENT:-読み取れず}）。先に手順3を実行してください。"; exit 1
+fi
+if ! git -C "${DASHBOARD_DIR}" grep -q "mapBooking" "${TAG}" -- services/analytics-sync/src/transform.ts 2>/dev/null; then
+  echo "同期ジョブのプログラムが売上の作り直し（予約・招待の取り込み）に対応していません（現在: ${CURRENT}）。"
+  echo "先に手順3をもう一度実行してください:  bash ${HERE}/step3-update-job-image.sh"; exit 1
 fi
 echo "同期ジョブのプログラム: ${CURRENT}"
 
@@ -23,7 +30,7 @@ cleanup() {
   echo
   if [[ ${UPDATED} == 1 ]]; then
     echo "# 再取り込み用の設定を外します"
-    gcloud run jobs update $JOB --region=$R --project=$P --remove-env-vars=BACKFILL_FROM,BACKFILL_TO \
+    gcloud run jobs update $JOB --region=$R --project=$P --remove-env-vars=BACKFILL_FROM,BACKFILL_TO,BOOKINGS \
       || echo "!!! 設定を外せませんでした。この出力を貼ってください（このままだと毎時同じ期間を読み直します）"
   fi
   if [[ ${PAUSED} == 1 ]]; then
@@ -40,5 +47,24 @@ cleanup() {
 trap cleanup EXIT
 
 gcloud scheduler jobs pause $SCHEDULER --project=$P --location=$R; PAUSED=1
-gcloud run jobs update $JOB --region=$R --project=$P --update-env-vars=BACKFILL_FROM=${FROM},BACKFILL_TO=${TO}; UPDATED=1
-gcloud run jobs execute $JOB --region=$R --project=$P --wait
+# 1か月ずつの区間に分ける（例: 2026-04-01→05-01, 05-01→06-01, …, 最終区間は TO まで）
+RANGES=()
+cur="${FROM}"
+while [[ "${cur}" < "${TO}" ]]; do
+  nxt=$(date -u -d "$(date -u -d "${cur}" +%Y-%m-01) +1 month" +%F)
+  [[ "${nxt}" > "${TO}" ]] && nxt="${TO}"
+  RANGES+=("${cur} ${nxt}")
+  cur="${nxt}"
+done
+i=0
+for range in "${RANGES[@]}"; do
+  set -- ${range}
+  i=$((i + 1))
+  echo
+  echo "# [${i}/${#RANGES[@]}] ${1} 〜 ${2}"
+  EXTRA=""
+  if [[ ${i} == 1 ]]; then EXTRA=",BOOKINGS=always"; fi # 予約・招待は全件スナップショットなので1回だけ
+  gcloud run jobs update $JOB --region=$R --project=$P --update-env-vars="BACKFILL_FROM=${1},BACKFILL_TO=${2}${EXTRA}" >/dev/null; UPDATED=1
+  gcloud run jobs execute $JOB --region=$R --project=$P --wait
+  if [[ ${i} == 1 ]]; then gcloud run jobs update $JOB --region=$R --project=$P --remove-env-vars=BOOKINGS >/dev/null; fi
+done

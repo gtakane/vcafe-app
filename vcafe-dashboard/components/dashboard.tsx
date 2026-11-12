@@ -93,7 +93,7 @@ export default function Dashboard({ initialData, initialStart, initialEnd, viewe
   const { submissions, submissionError } = useAttendanceSubmissions(viewer);
   const data = useMemo(() => filterData(remoteData, viewer, { start, end, granularity, maidId: maidId || undefined }), [remoteData, viewer, start, end, granularity, maidId]);
   const totals = summarize(data);
-  const trend = buildTrend(data.visits, granularity);
+  const trend = buildTrend(data.visits, granularity, data.bookings);
   const customerStats = customerRows(data);
   // ご帰宅クロスは一度だけ集計する（ユーザー×メイド×訪問の総当たりを避ける）。
   // ご帰宅数の定義は lib/analytics.ts に集約する（画面側で +1 すると概要と食い違う）。

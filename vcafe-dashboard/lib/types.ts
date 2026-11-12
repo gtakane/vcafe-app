@@ -73,6 +73,25 @@ export interface Visit {
   entryType?: string | null; // 無料ご帰宅の種類（freeTicket / newUserFree / freshMaidFree）
   billedCoinVendor?: string | null; // 消費したコインの購入元（apple / google）
   usedTicketCount?: number | null; // 1回のご帰宅で使ったチケット枚数（40分=2枚など）
+  freeCheki?: number | null; // cheki のうち無料のもの（誕生日プレゼント等）。売上から除く
+}
+
+/**
+ * 予約・招待（users/{id}/userReservations, userInvitations）。
+ * コインは予約した時点で消費されるため、売上はご帰宅ではなくこちらで計上する。
+ */
+export interface Booking {
+  id: string;
+  kind: "reservation" | "invitation";
+  at: string; // 予約・招待を受けた日時（売上の計上日時）
+  slotAt?: string | null; // 予約枠の開始日時
+  maidId: string | null;
+  customerId: string;
+  coin: number;
+  coinVendor: string | null;
+  rewardPoint: number;
+  canceled: boolean;
+  revenue: number; // 税込・円（キャンセルは0）
 }
 
 // メイドへのアイテムプレゼント（userRecordPresents）。
@@ -136,6 +155,8 @@ export interface AnalyticsData {
   customers: Customer[];
   visits: Visit[];
   shifts: Shift[];
+  // 予約・招待。未同期・未作成の環境では undefined。
+  bookings?: Booking[];
 }
 
 // 本番 maidWorkReport/{maidId}/monthlyReport/{YYYYMM} 由来の月次メイド実績（正データ）。

@@ -1,7 +1,23 @@
 import { BigQuery } from "@google-cloud/bigquery";
 import { mockAnalyticsData } from "./mock-data";
 import { filterData } from "./analytics";
-import type { AnalyticsData, Customer, Maid, Shift, SyncFreshness, Visit } from "./types";
+import { FREE_CHEKI_TYPES, visitRevenue } from "./metrics";
+import type { AnalyticsData, Booking, Customer, Maid, Shift, SyncFreshness, Visit } from "./types";
+
+/**
+ * 売上を経理の計上ロジックの単価で計算し直す（lib/metrics.ts visitRevenue）。
+ * 保存済みの revenue は同期した時点の定義で計算されているため、表示時に明細項目から出し直して
+ * 過去分も同じ定義にそろえる。明細項目を持たない古い行（ticketId 未取得）は保存値のまま使う。
+ */
+export function normalizeVisit(visit: Visit): Visit {
+  if (visit.ticketId == null) return visit;
+  return {
+    ...visit,
+    revenue: visitRevenue(visit.type, visit.ticketId, Number(visit.billedCoin) || 0, Number(visit.billedRewardPoint) || 0, visit.usedTicketCount, visit.billedCoinVendor),
+  };
+}
+
+const FREE_CHEKI_SQL = [...FREE_CHEKI_TYPES].map((type) => `'${type}'`).join(", ");
 
 export interface DataQuery {
   start: string;
@@ -32,8 +48,19 @@ export async function loadAnalyticsData(query: DataQuery): Promise<AnalyticsData
     // 該当パーティションだけを読む。ロジック自体は schema.sql の *_current と同じで、
     // 二重管理を避けるため直接コピーはせず、この関数だけがダッシュボードから使われる。
     query: `
-      WITH selected_visits AS (
-        SELECT * FROM \`${projectId}.${dataset}.visits_current_range\`(DATE(@startDate), DATE(@endDate), @maidId)
+      WITH free_cheki AS (
+        -- 誕生日プレゼント等の無料チェキ。ご帰宅の cheki（営業日・ユーザー・メイド単位で1件目に集約）と同じ単位で数える。
+        SELECT customerId, maidId, DATE(TIMESTAMP_SUB(\`at\`, INTERVAL 2 HOUR), "Asia/Tokyo") AS business_date, COUNT(DISTINCT id) AS n
+        FROM \`${projectId}.${dataset}.cheki_raw\`
+        WHERE DATE(\`at\`) BETWEEN DATE_SUB(DATE(@startDate), INTERVAL 1 DAY) AND DATE_ADD(DATE(@endDate), INTERVAL 1 DAY)
+          AND chekiType IN (${FREE_CHEKI_SQL})
+        GROUP BY customerId, maidId, business_date
+      ), selected_visits AS (
+        SELECT v.*, IF(v.cheki > 0, LEAST(v.cheki, COALESCE(f.n, 0)), 0) AS freeCheki
+        FROM \`${projectId}.${dataset}.visits_current_range\`(DATE(@startDate), DATE(@endDate), @maidId) v
+        LEFT JOIN free_cheki f
+          ON f.customerId = v.customerId AND f.maidId = v.maidId
+         AND f.business_date = DATE(TIMESTAMP_SUB(v.\`at\`, INTERVAL 2 HOUR), "Asia/Tokyo")
       ), selected_shifts AS (
         SELECT * FROM \`${projectId}.${dataset}.shifts_current_range\`(DATE(@startDate), DATE(@endDate), @maidId)
       ), customer_payments AS (
@@ -63,9 +90,38 @@ export async function loadAnalyticsData(query: DataQuery): Promise<AnalyticsData
     generatedAt: new Date().toISOString(),
     maids: parsed.filter((r) => r.kind === "maid").map((r) => r.value as Maid),
     customers: parsed.filter((r) => r.kind === "customer").map((r) => r.value as Customer),
-    visits: parsed.filter((r) => r.kind === "visit").map((r) => r.value as Visit),
+    visits: parsed.filter((r) => r.kind === "visit").map((r) => normalizeVisit(r.value as Visit)),
     shifts: parsed.filter((r) => r.kind === "shift").map((r) => r.value as Shift),
+    bookings: await loadBookings(bigquery, location, projectId, dataset, query),
   };
+}
+
+/**
+ * 予約・招待。売上は予約・招待を受けた日（営業日）に計上する。
+ * bookings_raw は2026-11追加のため、未作成の環境では空として扱い画面全体を止めない。
+ */
+async function loadBookings(bigquery: BigQuery, location: string, projectId: string, dataset: string, query: DataQuery): Promise<Booking[]> {
+  try {
+    const [rows] = await bigquery.query({
+      location,
+      params: { startDate: query.start, endDate: query.end, maidId: query.maidId ?? null },
+      types: { maidId: "STRING" },
+      maximumBytesBilled: process.env.BIGQUERY_MAX_BYTES_BILLED || "1073741824",
+      query: `
+        SELECT TO_JSON_STRING(STRUCT(id, kind, \`at\`, slotAt, maidId, customerId, coin, coinVendor, rewardPoint, canceled, revenue)) AS payload
+        FROM \`${projectId}.${dataset}.bookings_current\`
+        WHERE DATE(TIMESTAMP_SUB(\`at\`, INTERVAL 2 HOUR), "Asia/Tokyo") BETWEEN DATE(@startDate) AND DATE(@endDate)
+          AND (@maidId IS NULL OR maidId = @maidId)
+      `,
+    });
+    return rows.map((row) => {
+      const value = JSON.parse(String(row.payload)) as Booking;
+      return { ...value, coin: Number(value.coin) || 0, rewardPoint: Number(value.rewardPoint) || 0, revenue: Number(value.revenue) || 0, canceled: Boolean(value.canceled) };
+    });
+  } catch (error) {
+    console.warn(`BOOKINGS_UNAVAILABLE ${(error as Error).message}`);
+    return [];
+  }
 }
 
 

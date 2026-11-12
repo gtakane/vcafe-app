@@ -29,6 +29,7 @@ export const INSERT_TABLES = [
   "shifts_raw",
   "payments_raw",
   "presents_raw",
+  "bookings_raw",
   "maid_profiles_raw",
   "maid_monthly_raw",
   "sync_runs",

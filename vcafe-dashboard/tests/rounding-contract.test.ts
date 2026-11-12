@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { businessDateJst, visitRevenue, visitWeight, type VisitType } from "../lib/metrics.ts";
+import { businessDateJst, legacyVisitRevenue, visitWeight, type VisitType } from "../lib/metrics.ts";
 
 // 指摘10の契約テスト（TypeScript側）。
 // 同じ fixture を tests/rounding_contract_test.py からも実行し、両言語で同じ値になることを保証する。
@@ -25,9 +25,9 @@ test("visitWeight が golden fixture と一致する", () => {
   }
 });
 
-test("visitRevenue が golden fixture と一致する", () => {
+test("legacyVisitRevenue が golden fixture と一致する（core.py との互換）", () => {
   for (const item of fixture.visitRevenue) {
-    const actual = visitRevenue(item.type as VisitType, item.ticketId, item.billedCoin, item.billedReward);
+    const actual = legacyVisitRevenue(item.type as VisitType, item.ticketId, item.billedCoin, item.billedReward);
     assert.equal(actual, item.expected, `${item.ticketId} coin=${item.billedCoin} reward=${item.billedReward} ${item.note ?? ""}`);
   }
 });

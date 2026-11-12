@@ -84,8 +84,27 @@
       "at": "TIMESTAMP",
       "syncedAt": "TIMESTAMP",
       "sourceUpdatedAt": "TIMESTAMP",
+      "chekiType": "STRING",
       "recordKey": "STRING",
       "runId": "STRING"
+    },
+    "bookings_raw": {
+      "id": "STRING",
+      "kind": "STRING",
+      "customerId": "STRING",
+      "maidId": "STRING",
+      "at": "TIMESTAMP",
+      "slotAt": "TIMESTAMP",
+      "coin": "FLOAT64",
+      "coinVendor": "STRING",
+      "rewardPoint": "FLOAT64",
+      "canceled": "BOOL",
+      "refundedYen": "FLOAT64",
+      "revenue": "INT64",
+      "recordKey": "STRING",
+      "runId": "STRING",
+      "syncedAt": "TIMESTAMP",
+      "sourceUpdatedAt": "TIMESTAMP"
     },
     "shifts_raw": {
       "id": "STRING",

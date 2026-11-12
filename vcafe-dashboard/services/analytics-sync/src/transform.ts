@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { firestoreTimestampToIso, mapFirestoreUser } from "../../../lib/user-mapping.ts";
-import { classifyVisit, COIN_TO_YEN, DEFAULT_INITIAL_TIME, visitRevenue, visitWeight } from "../../../lib/metrics.ts";
-import type { Customer, Present, Shift, Visit } from "../../../lib/types.ts";
+import { classifyVisit, COIN_TO_YEN, COIN_YEN, DEFAULT_INITIAL_TIME, REWARD_POINT_YEN, visitRevenue, visitWeight } from "../../../lib/metrics.ts";
+import type { Booking, Customer, Present, Shift, Visit } from "../../../lib/types.ts";
 
 export interface SourceDocument {
   id: string;
@@ -48,7 +48,11 @@ export interface ChekiRow {
   at: string;
   syncedAt: string;
   sourceUpdatedAt: string | null;
+  // userAlbum.type。誕生日プレゼント等の無料チェキ（birthdayGift / birthdayGiftSigned）を売上から除くために保持する。
+  chekiType: string | null;
 }
+
+export type BookingRow = Omit<Booking, "revenue"> & SyncRowMeta & { refundedYen: number; revenue: number };
 
 export interface ShiftRow extends Shift {
   maidName: string;
@@ -97,7 +101,9 @@ export function mapVisit(document: SourceDocument, secret: string, maidIdsByNick
   const type = classifyVisit(ticketId, roomType, { isFreeEntry: document.data.isFreeEntry, entryType });
   const billedCoinVendor = document.data.billedCoinVendor ? String(document.data.billedCoinVendor) : null;
   const usedTicketCount = document.data.usedTicketCount == null ? null : Math.round(numberValue(document.data.usedTicketCount));
-  const revenue = visitRevenue(type, ticketId, billedCoin, billedReward);
+  // 売上は経理の計上ロジックと同じ単価で出す（lib/metrics.ts visitRevenue）。
+  const revenue = visitRevenue(type, ticketId, billedCoin, billedReward, usedTicketCount, billedCoinVendor);
+
   const minutes = numberValue(document.data.initialTime) || DEFAULT_INITIAL_TIME;
   const weight = visitWeight(minutes);
   // メイドを確定できない行は集計へ混ぜず reject する（nickname:* による分裂を防ぐ）。
@@ -143,7 +149,38 @@ export function mapCheki(document: SourceDocument, secret: string, maidIdsByNick
   if (!at) return null;
   const resolvedMaidId = maidId(document, maidIdsByNickname);
   if (!resolvedMaidId) return null;
-  return { id: document.id, recordKey: keyFor(document, "userAlbum", secret), customerId: pseudonymizeCustomerId(document.parentId, secret), maidId: resolvedMaidId, at, syncedAt, sourceUpdatedAt: document.updatedAt || null };
+  const chekiType = document.data.type ? String(document.data.type) : null;
+  return { id: document.id, recordKey: keyFor(document, "userAlbum", secret), customerId: pseudonymizeCustomerId(document.parentId, secret), maidId: resolvedMaidId, at, syncedAt, sourceUpdatedAt: document.updatedAt || null, chekiType };
+}
+
+/**
+ * users/{id}/userReservations/{id} … 予約（reservedDate＝予約した日時）
+ * users/{id}/userInvitations/{id}  … 招待（acceptedDate＝招待を受けた日時）
+ * コインは予約・招待の時点で消費されるため、この日時を売上の計上日時とする。
+ * キャンセル（canceledDate あり）は消費コインが返却される前提で売上0とする。
+ */
+export function mapBooking(document: SourceDocument, kind: Booking["kind"], secret: string, maidIdsByNickname: Map<string, string>): BookingRow | null {
+  if (!document.parentId) return null;
+  const at = firestoreTimestampToIso(kind === "reservation" ? document.data.reservedDate : document.data.acceptedDate);
+  if (!at) return null;
+  const coin = numberValue(document.data.purchasedCoin);
+  const rewardPoint = numberValue(document.data.purchasedRewardPoint);
+  const coinVendor = document.data.purchasedCoinVendor ? String(document.data.purchasedCoinVendor) : null;
+  const canceled = Boolean(document.data.canceledDate);
+  const revenue = canceled ? 0 : Math.round(coin * COIN_YEN) + Math.round(rewardPoint * REWARD_POINT_YEN);
+  return {
+    id: document.id,
+    kind,
+    recordKey: keyFor(document, kind === "reservation" ? "userReservations" : "userInvitations", secret),
+    sourceUpdatedAt: document.updatedAt ?? null,
+    at,
+    slotAt: firestoreTimestampToIso(document.data.openTime),
+    // ニックネームが名簿で解決できない予約も売上からは落とさない（メイド別には出ない）。
+    maidId: maidId(document, maidIdsByNickname),
+    customerId: pseudonymizeCustomerId(document.parentId, secret),
+    coin, coinVendor, rewardPoint, canceled, revenue,
+    refundedYen: numberValue(document.data.refundedAmountPrice),
+  };
 }
 
 export function mapShift(document: SourceDocument, maidIdsByNickname: Map<string, string> = new Map(), secret = ""): ShiftRow | null {
