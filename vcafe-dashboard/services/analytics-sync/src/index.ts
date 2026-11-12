@@ -10,6 +10,7 @@ import { assertLiveSchema, liveColumnsSql, type LiveColumn } from "./schema-prec
 import { looksLikeMissingColumn, summarizeInsertErrors } from "./insert-errors.ts";
 import { buildMaidDirectory, mapCheki, pseudonymizeCustomerId, recordKeyOf, mapMaidProfile, mapMonthlyReport, mapPayment, mapPresent, mapPurchase, mapShift, mapUser, mapUserPayment, mapVisit, type SourceDocument } from "./transform.ts";
 import { rowInsertId } from "./row-insert-id.ts";
+import { excludedMaidIdsFrom, withoutExcludedMaids } from "./excluded-maids.ts";
 
 // 例外・Promise拒否の詳細を確実にログへ出す（Cloud Run Jobでの原因特定用）。
 process.on("unhandledRejection", (error) => {
@@ -23,6 +24,9 @@ const sourceApp = initializeApp({ credential: applicationDefault(), projectId: c
 const sourceDb = getFirestore(sourceApp);
 const bigquery = new BigQuery({ projectId: config.analyticsProjectId });
 const syncedAt = new Date().toISOString();
+// テスト用メイド（EXCLUDED_MAID_IDS）。テストユーザーと同様に集計へ入れない。
+const excludedMaids = excludedMaidIdsFrom(process.env);
+if (excludedMaids.size) console.info(JSON.stringify({ excludedMaids: excludedMaids.size }));
 // 実行識別子。同一 syncedAt の行が複数実行にまたがったときの順序決定に使う。
 const runId = `${syncedAt}-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -321,11 +325,11 @@ async function syncWindow(start: Date, end: Date, windowKind = "incremental"): P
         sourceUpdatedAt: source?.updatedAt ?? null,
       };
     })),
-    insertRows("visits_raw", visits.map((row) => ({ ...row, syncedAt, runId }))),
-    insertRows("cheki_raw", cheki.map((row) => ({ ...row, runId }))),
-    insertRows("shifts_raw", shifts.map((row) => ({ ...row, syncedAt, runId }))),
+    insertRows("visits_raw", withoutExcludedMaids(visits, excludedMaids, (r) => r.maidId).map((row) => ({ ...row, syncedAt, runId }))),
+    insertRows("cheki_raw", withoutExcludedMaids(cheki, excludedMaids, (r) => r.maidId).map((row) => ({ ...row, runId }))),
+    insertRows("shifts_raw", withoutExcludedMaids(shifts, excludedMaids, (r) => r.maidId).map((row) => ({ ...row, syncedAt, runId }))),
     insertRows("payments_raw", payments.map((row) => ({ ...row, syncedAt, runId }))),
-    insertRows("presents_raw", presents.map((row) => ({ ...row, syncedAt, runId }))),
+    insertRows("presents_raw", withoutExcludedMaids(presents, excludedMaids, (r) => r.maidId).map((row) => ({ ...row, syncedAt, runId }))),
   ]);
 
   const rejects = {
@@ -395,8 +399,8 @@ async function syncMaidReports() {
     .map((document) => mapMonthlyReport(document.ref.parent.parent!.id, document.id, document.data()));
 
   await Promise.all([
-    insertRows("maid_profiles_raw", profiles.map((row) => ({ ...row, syncedAt, runId }))),
-    insertRows("maid_monthly_raw", monthly.map((row) => ({ ...row, syncedAt, runId }))),
+    insertRows("maid_profiles_raw", withoutExcludedMaids(profiles, excludedMaids, (r) => r.id).map((row) => ({ ...row, syncedAt, runId }))),
+    insertRows("maid_monthly_raw", withoutExcludedMaids(monthly, excludedMaids, (r) => r.maidId).map((row) => ({ ...row, syncedAt, runId }))),
   ]);
   console.info(JSON.stringify({ maidReports: { profiles: profiles.length, monthly: monthly.length } }));
 }

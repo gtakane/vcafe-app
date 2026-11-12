@@ -69,3 +69,20 @@ cd ~/vcafe-app && git pull --ff-only
 > 2026-11-12時点でトラフィック100%は `vcafe-dashboard-18da493-0728-1916`。
 > 7/29 の `ff91dad`（BigQuery のスキャン量削減）は作成済みだが切替されていない。
 > 今回の配備でまとめて反映される。
+
+## 追加: テスト用メイドの除外
+
+本番環境に作られたテスト用メイド（例: うみのうみ）へのご帰宅・シフト・名簿・月次実績を集計から外す。
+テストユーザーは `testUser` フラグで除外しているが、メイドには相当するフラグが無いため、
+同期ジョブの環境変数 `EXCLUDED_MAID_IDS`（maidId のカンマ区切り）で指定する。
+
+| 手順 | コマンド |
+| --- | --- |
+| A | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step3-update-job-image.sh`（除外に対応したプログラムへ差し替え） |
+| B | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/purge-test-maid.sh うみのうみ` |
+
+手順Bは、名前から maidId を特定して表示し、`yes` の確認後に除外設定と取り込み済み行の削除を行う。
+直近数日分は書き込み直後で BigQuery が削除を受け付けないことがあり、その場合は数日後に同じコマンドを再実行する。
+削除は分析用BigQueryのみで、元データは本番に残るため、設定を外して再取り込みすれば戻せる。
+
+> `deploy-disabled-job-tokyo.sh` で環境変数を置き換えると `EXCLUDED_MAID_IDS` も消える。
