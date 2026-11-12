@@ -1,153 +1,194 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Customer } from "@/lib/types";
+import {
+  CUSTOMER_FIELDS, displayValue, fieldOf, filterCustomers, jstDay, opsFor, sortCustomers,
+  type CombineMode, type Condition, type ConditionOp, type CustomerRecord,
+} from "@/lib/customer-query";
 import { genderLabel, jstDate, number, yen } from "../shared/format";
 import VisitLogPanel from "../visit-log/panel";
 
-// 全会員の通算値。上部の期間フィルタには依存しない。
-type CustomerCol = { key: keyof Customer; label: string; kind: "text" | "num" | "money" | "date" | "gender" | "year" };
+// ユーザーデータベース（全会員の通算値。上部の期間フィルタには依存しない）。
+// 全会員を一度だけ読み込み、絞り込み・並び替えは画面側で即時に行う（lib/customer-query.ts）。
 
-const CUSTOMER_DB_COLUMNS: CustomerCol[] = [
-  { key: "name", label: "ユーザー名", kind: "text" },
-  { key: "rank", label: "ランク", kind: "text" },
-  { key: "gender", label: "性別", kind: "gender" },
-  { key: "birthYear", label: "生年", kind: "year" },
-  { key: "registeredAt", label: "登録日", kind: "date" },
-  { key: "lastVisitAt", label: "最終ご帰宅日", kind: "date" },
-  { key: "totalVisitAmount", label: "累計ご帰宅", kind: "num" },
-  { key: "maxConsecutiveVisitDays", label: "最大連続日数", kind: "num" },
-  { key: "paymentCount", label: "課金回数(通算)", kind: "num" },
-  { key: "paymentAmount", label: "課金額(通算)", kind: "money" },
-  { key: "lastPaymentAt", label: "最終課金日", kind: "date" },
-  { key: "purchasedItemQuantity", label: "アイテム購入数", kind: "num" },
-  { key: "purchasedItemCoin", label: "アイテム購入額(コイン)", kind: "num" },
-  { key: "lastPurchasedItemAt", label: "最終アイテム購入日", kind: "date" },
-  { key: "presentAmount", label: "プレゼント回数", kind: "num" },
-  { key: "lastPresentAt", label: "最終プレゼント日", kind: "date" },
-  { key: "coin", label: "コイン残高", kind: "num" },
-  { key: "rewardPoint", label: "リワードP残高", kind: "num" },
+const ROW_HEIGHT = 46; // 1行の高さ(px)。表示中の行だけを描画する（数千行でもスクロールが重くならない）
+const OVERSCAN = 12;
+const DEFAULT_COLUMNS = ["name", "rank", "gender", "birthYear", "registeredAt", "lastVisitAt", "totalVisitAmount", "maxConsecutiveVisitDays", "paymentCount", "paymentAmount", "lastPaymentAt", "purchasedItemQuantity", "purchasedItemCoin", "lastPurchasedItemAt", "presentAmount", "lastPresentAt", "coin", "rewardPoint"];
+const COLUMN_STORAGE_KEY = "vcafe.userdb.columns";
+
+const FORMAT = { number: (n: number) => number.format(n), yen: (n: number) => yen.format(n), date: (iso: string) => jstDate(iso), gender: (g: string) => genderLabel(g) };
+const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" }).format(new Date());
+let conditionSeq = 0;
+const newCondition = (field = "lastVisitAt", op: ConditionOp = "olderThanDays", a = "", b = ""): Condition => ({ id: `c${++conditionSeq}`, field, op, a, b });
+
+// よく使う切り口。押すと条件が入る（あとから編集できる）。
+const PRESETS: Array<{ label: string; mode: CombineMode; conditions: () => Condition[] }> = [
+  { label: "休眠（最終ご帰宅が30日以上前）", mode: "and", conditions: () => [newCondition("lastVisitAt", "olderThanDays", "30")] },
+  { label: "課金あり・60日以上ご帰宅なし", mode: "and", conditions: () => [newCondition("paying", "equals", "yes"), newCondition("lastVisitAt", "olderThanDays", "60")] },
+  { label: "直近30日の新規登録", mode: "and", conditions: () => [newCondition("registeredAt", "withinDays", "30")] },
+  { label: "直近30日に課金", mode: "and", conditions: () => [newCondition("lastPaymentAt", "withinDays", "30")] },
+  { label: "未課金・累計ご帰宅10回以上", mode: "and", conditions: () => [newCondition("paying", "equals", "no"), newCondition("totalVisitAmount", "between", "10")] },
 ];
 
-const SORTABLE_DB_KEYS = new Set<string>(["registeredAt", "name", "rank", "gender", "birthYear", "lastVisitAt", "lastPaymentAt", "lastPurchasedItemAt", "lastPresentAt", "purchasedItemCoin", "purchasedItemQuantity", "presentAmount", "coin", "rewardPoint", "totalVisitAmount", "maxConsecutiveVisitDays", "paymentCount", "paymentAmount"]);
-
-const NUMERIC_FILTER_COLUMNS = ["totalVisitAmount", "paymentAmount", "paymentCount", "maxConsecutiveVisitDays", "purchasedItemQuantity", "purchasedItemCoin", "presentAmount", "coin", "rewardPoint", "birthYear"]
-  .map((key) => CUSTOMER_DB_COLUMNS.find((c) => String(c.key) === key))
-  .filter((c): c is NonNullable<typeof c> => Boolean(c));
-
-type NumericFilterChip = { key: string; min: string; max: string };
+function loadColumns(): string[] {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(COLUMN_STORAGE_KEY) || "null");
+    if (Array.isArray(saved) && saved.every((k) => typeof k === "string" && fieldOf(k))) return saved.length ? saved : DEFAULT_COLUMNS;
+  } catch { /* 保存できない環境では既定の列 */ }
+  return DEFAULT_COLUMNS;
+}
 
 export default function CustomerDatabase({ onExport }: { onExport: (name: string, data: Array<Array<string | number>>) => void }) {
-  const [query, setQuery] = useState("");
-  const [rank, setRank] = useState("");
-  const [gender, setGender] = useState("");
-  const [paying, setPaying] = useState("");
-  const [regFrom, setRegFrom] = useState("");
-  const [regTo, setRegTo] = useState("");
-  // 数値指標の範囲フィルタ（確定分のチップ＋編集中の1行）。
-  const [numFilters, setNumFilters] = useState<NumericFilterChip[]>([]);
-  const [nfKey, setNfKey] = useState(String(NUMERIC_FILTER_COLUMNS[0]?.key || "totalVisitAmount"));
-  const [nfMin, setNfMin] = useState("");
-  const [nfMax, setNfMax] = useState("");
-  // 既定は登録日の古い順（会員の起点から）。
-  const [sortKey, setSortKey] = useState("registeredAt");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [result, setResult] = useState<{ total: number; returned: number; customers: Customer[] } | null>(null);
+  const [all, setAll] = useState<CustomerRecord[] | null>(null);
+  const [cachedAt, setCachedAt] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [search, setSearch] = useState("");
+  const [conditions, setConditions] = useState<Condition[]>([]);
+  const [mode, setMode] = useState<CombineMode>("and");
+  const [sortKey, setSortKey] = useState("registeredAt");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [columns, setColumns] = useState<string[]>(DEFAULT_COLUMNS);
   const [selected, setSelected] = useState<Customer | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewport, setViewport] = useState(600);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => { setColumns(loadColumns()); }, []);
+  useEffect(() => { try { window.localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(columns)); } catch { /* 無視 */ } }, [columns]);
 
   useEffect(() => {
     const controller = new AbortController();
-    const timer = window.setTimeout(async () => {
-      setLoading(true); setError("");
-      try {
-        const params = new URLSearchParams({ sort: sortKey, dir: sortDir, limit: "2000" });
-        if (query.trim()) params.set("q", query.trim());
-        if (rank) params.set("rank", rank);
-        if (gender) params.set("gender", gender);
-        if (paying) params.set("paying", paying);
-        if (regFrom) params.set("regFrom", regFrom);
-        if (regTo) params.set("regTo", regTo);
-        for (const f of numFilters) {
-          if (f.min !== "") params.set(`min_${f.key}`, f.min);
-          if (f.max !== "") params.set(`max_${f.key}`, f.max);
-        }
-        const response = await fetch(`/api/customers?${params}`, { signal: controller.signal, cache: "no-store" });
+    setLoading(true); setError("");
+    fetch(`/api/customers?all=1${reloadKey ? "&refresh=1" : ""}`, { signal: controller.signal, cache: "no-store" })
+      .then(async (response) => {
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || "ユーザー一覧を取得できませんでした");
-        setResult(body);
-      } catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "ユーザー一覧を取得できませんでした"); }
-      finally { if (!controller.signal.aborted) setLoading(false); }
-    }, 250);
-    return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [query, rank, gender, paying, regFrom, regTo, numFilters, sortKey, sortDir]);
+        setAll(body.customers as CustomerRecord[]);
+        setCachedAt(body.cachedAt || "");
+      })
+      .catch((e) => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "ユーザー一覧を取得できませんでした"); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [reloadKey]);
 
-  const rows = result?.customers || [];
-  // 選択肢は取得したユーザー自身から作る（期間フィルタ由来のデータに依存させない）。
-  const genders = useMemo(() => [...new Set(rows.map((r) => r.gender).filter(Boolean))].sort() as string[], [rows]);
-  const ranks = useMemo(() => [...new Set(rows.map((r) => r.rank).filter(Boolean))].sort(), [rows]);
+  // 選択肢は全会員から作る（絞り込みで選択肢が消えないようにする）。
+  const options = useMemo(() => ({
+    rank: [...new Set((all || []).map((r) => r.rank).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ja")),
+    gender: [...new Set((all || []).map((r) => r.gender).filter(Boolean) as string[])].sort(),
+  }), [all]);
+
+  const rows = useMemo(() => {
+    if (!all) return [];
+    const filtered = filterCustomers(all, { search, conditions, mode, today: today() });
+    return sortCustomers(filtered, sortKey, sortDir);
+  }, [all, search, conditions, mode, sortKey, sortDir]);
+
+  useEffect(() => {
+    // 条件・並び替えが変わったら先頭に戻す。
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [search, conditions, mode, sortKey, sortDir]);
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const update = () => setViewport(element.clientHeight || 600);
+    update();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(update) : null;
+    observer?.observe(element);
+    return () => observer?.disconnect();
+  }, [all]);
+
+  const visibleFields = columns.map((key) => fieldOf(key)).filter((f): f is NonNullable<typeof f> => Boolean(f));
+  const first = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const last = Math.min(rows.length, Math.ceil((scrollTop + viewport) / ROW_HEIGHT) + OVERSCAN);
+  const windowRows = rows.slice(first, last);
+
   const toggleSort = (key: string) => {
-    if (!SORTABLE_DB_KEYS.has(key)) return;
     if (key === sortKey) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
-    else { setSortKey(key); setSortDir(key === "registeredAt" ? "asc" : "desc"); }
+    else {
+      setSortKey(key);
+      const kind = fieldOf(key)?.kind;
+      // 数値・日付は「多い順・新しい順」から、文字・ランクは上から順に見たいことが多い。
+      setSortDir(kind === "text" || key === "rank" || key === "registeredAt" ? "asc" : "desc");
+    }
   };
-  const cell = (row: Customer, c: CustomerCol) => {
-    const value = row[c.key];
-    if (c.kind === "gender") return genderLabel(String(value ?? ""));
-    if (c.kind === "year") return Number(value) ? String(Number(value)) : "—";
-    if (c.kind === "money") return yen.format(Number(value) || 0);
-    if (c.kind === "num") return Number(value) ? number.format(Number(value)) : "—";
-    if (c.kind === "date") return value ? jstDate(String(value)) : "—";
-    return String(value ?? "—");
+  const updateCondition = (id: string, patch: Partial<Condition>) => setConditions((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  const changeField = (id: string, field: string) => {
+    const kind = fieldOf(field)?.kind ?? "text";
+    updateCondition(id, { field, op: opsFor(kind)[0].op, a: "", b: "" });
   };
-  const clearFilters = () => { setQuery(""); setRank(""); setGender(""); setPaying(""); setRegFrom(""); setRegTo(""); setNumFilters([]); setNfMin(""); setNfMax(""); };
-  const hasFilter = Boolean(query || rank || gender || paying || regFrom || regTo || numFilters.length);
-  const numericLabel = (key: string) => NUMERIC_FILTER_COLUMNS.find((c) => String(c.key) === key)?.label || key;
-  const addNumericFilter = () => {
-    if (nfMin === "" && nfMax === "") return;
-    // 同じ指標は上書き（1指標につき1つの範囲）。
-    setNumFilters((prev) => [...prev.filter((f) => f.key !== nfKey), { key: nfKey, min: nfMin, max: nfMax }]);
-    setNfMin(""); setNfMax("");
+  const totalPayment = rows.reduce((sum, r) => sum + (Number(r.paymentAmount) || 0), 0);
+  const rightAligned = (kind: string) => kind === "number" || kind === "money" || kind === "year";
+
+  const exportCsv = () => onExport(`users_${today()}.csv`, [
+    ["会員ID", ...visibleFields.map((f) => f.label)],
+    ...rows.map((r) => [r.id, ...visibleFields.map((f) => (f.kind === "number" || f.kind === "money" ? Number((r as unknown as Record<string, unknown>)[f.key] ?? 0) || 0 : displayValue(r, f, { ...FORMAT, number: String, yen: String })))]),
+  ]);
+
+  const valueInputs = (c: Condition) => {
+    const field = fieldOf(c.field);
+    if (!field || c.op === "isEmpty" || c.op === "isNotEmpty") return null;
+    if (field.kind === "text") return <input value={c.a || ""} onChange={(e) => updateCondition(c.id, { a: e.target.value })} placeholder="文字" />;
+    if (field.kind === "select" || field.kind === "gender") {
+      const values = field.kind === "select" ? options.rank : options.gender;
+      return <select value={c.a || ""} onChange={(e) => updateCondition(c.id, { a: e.target.value })}><option value="">選択</option>{values.map((v) => <option key={v} value={v}>{field.kind === "gender" ? genderLabel(v) : v}</option>)}</select>;
+    }
+    if (field.kind === "boolean") return <select value={c.a || ""} onChange={(e) => updateCondition(c.id, { a: e.target.value })}><option value="">選択</option><option value="yes">あり</option><option value="no">なし</option></select>;
+    if (field.kind === "date" && (c.op === "withinDays" || c.op === "olderThanDays")) return <><input type="number" min={0} value={c.a || ""} onChange={(e) => updateCondition(c.id, { a: e.target.value })} placeholder="日数" /><span className="muted">日</span></>;
+    if (field.kind === "date") return <><input type="date" value={c.a || ""} onChange={(e) => updateCondition(c.id, { a: e.target.value })} /><span className="muted">〜</span><input type="date" value={c.b || ""} onChange={(e) => updateCondition(c.id, { b: e.target.value })} /></>;
+    return <><input type="number" value={c.a || ""} onChange={(e) => updateCondition(c.id, { a: e.target.value })} placeholder="以上" /><span className="muted">〜</span><input type="number" value={c.b || ""} onChange={(e) => updateCondition(c.id, { b: e.target.value })} placeholder="以下" /></>;
   };
-  const rightAligned = (c: CustomerCol) => c.kind === "num" || c.kind === "money" || c.kind === "year";
 
   return <>
     <section className="panel table-panel">
       <div className="panel-head">
-        <div><p className="eyebrow">CUSTOMER DATABASE</p><h2>ユーザーデータベース</h2><small>{result ? `${number.format(result.total)}名中 ${number.format(rows.length)}名を表示` : "読込中"}・全会員の累計値（登録時からの通算。期間指定なし）</small></div>
-        <button className="secondary" disabled={!rows.length} onClick={() => onExport(`users_all.csv`, [["会員ID", ...CUSTOMER_DB_COLUMNS.map((c) => c.label)], ...rows.map((r) => [r.id, ...CUSTOMER_DB_COLUMNS.map((c) => (c.kind === "date" ? (r[c.key] ? jstDate(String(r[c.key])) : "") : c.kind === "gender" ? genderLabel(String(r[c.key] ?? "")) : String(r[c.key] ?? "")))])])}>CSV出力</button>
+        <div><p className="eyebrow">CUSTOMER DATABASE</p><h2>ユーザーデータベース</h2>
+          <small>{all ? `${number.format(all.length)}名中 ${number.format(rows.length)}名が一致・課金額合計 ${yen.format(totalPayment)}` : "読込中"}・全会員の通算値（期間指定なし）{cachedAt ? `・${new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit" }).format(new Date(cachedAt))} 時点` : ""}</small></div>
+        <div style={{ display: "flex", gap: ".5rem", alignItems: "center" }}>
+          <details className="column-picker"><summary className="secondary">表示する列</summary><div className="column-picker-list">
+            {CUSTOMER_FIELDS.map((f) => <label key={f.key}><input type="checkbox" checked={columns.includes(f.key)} disabled={f.key === "name"} onChange={(e) => setColumns((prev) => e.target.checked ? CUSTOMER_FIELDS.map((x) => x.key).filter((k) => prev.includes(k) || k === f.key) : prev.filter((k) => k !== f.key))} />{f.label}</label>)}
+            <button className="secondary" onClick={() => setColumns(DEFAULT_COLUMNS)}>既定に戻す</button>
+          </div></details>
+          <button className="secondary" onClick={() => setReloadKey((k) => k + 1)} disabled={loading}>最新を読み込む</button>
+          <button className="secondary" disabled={!rows.length} onClick={exportCsv}>CSV出力</button>
+        </div>
       </div>
       <div className="table-filters">
-        <label>検索<input className="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="⌕ 名前・会員ID" /></label>
-        <label>ランク<select value={rank} onChange={(e) => setRank(e.target.value)}><option value="">すべて</option>{ranks.map((r) => <option key={r} value={r}>{r}</option>)}</select></label>
-        <label>性別<select value={gender} onChange={(e) => setGender(e.target.value)}><option value="">すべて</option>{genders.map((g) => <option key={g} value={g}>{genderLabel(g)}</option>)}</select></label>
-        <label>課金<select value={paying} onChange={(e) => setPaying(e.target.value)}><option value="">すべて</option><option value="yes">課金あり</option><option value="no">課金なし</option></select></label>
-        <label>登録日(から)<input type="date" value={regFrom} onChange={(e) => setRegFrom(e.target.value)} /></label>
-        <label>登録日(まで)<input type="date" value={regTo} onChange={(e) => setRegTo(e.target.value)} /></label>
-        {hasFilter && <button className="secondary" onClick={clearFilters}>条件をクリア</button>}
+        <label>検索<input className="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="⌕ 名前・会員ID" /></label>
+        <label>よく使う条件<select value="" onChange={(e) => { const p = PRESETS[Number(e.target.value)]; if (p) { setConditions(p.conditions()); setMode(p.mode); } }}><option value="">選んで入力</option>{PRESETS.map((p, i) => <option key={p.label} value={i}>{p.label}</option>)}</select></label>
+        {(search || conditions.length > 0) && <button className="secondary" onClick={() => { setSearch(""); setConditions([]); }}>条件をクリア</button>}
       </div>
-      <div className="table-filters">
-        <label>数値で絞り込み<select value={nfKey} onChange={(e) => setNfKey(e.target.value)}>{NUMERIC_FILTER_COLUMNS.map((c) => <option key={String(c.key)} value={String(c.key)}>{c.label}</option>)}</select></label>
-        <label>以上<input type="number" inputMode="numeric" style={{ width: "7rem" }} value={nfMin} onChange={(e) => setNfMin(e.target.value)} placeholder="下限" /></label>
-        <label>以下<input type="number" inputMode="numeric" style={{ width: "7rem" }} value={nfMax} onChange={(e) => setNfMax(e.target.value)} placeholder="上限" /></label>
-        <button className="secondary" onClick={addNumericFilter} disabled={nfMin === "" && nfMax === ""}>この条件で絞り込む</button>
-        {numFilters.map((f) => (
-          <button key={f.key} className="secondary" title="クリックで解除" onClick={() => setNumFilters((prev) => prev.filter((x) => x.key !== f.key))}>
-            {numericLabel(f.key)} {f.min !== "" ? `${number.format(Number(f.min))}以上` : ""}{f.min !== "" && f.max !== "" ? "・" : ""}{f.max !== "" ? `${number.format(Number(f.max))}以下` : ""} ✕
-          </button>
+      <div className="table-filters condition-builder">
+        {conditions.length > 1 && <label>組み合わせ<select value={mode} onChange={(e) => setMode(e.target.value as CombineMode)}><option value="and">すべて満たす（かつ）</option><option value="or">いずれかを満たす（または）</option></select></label>}
+        {conditions.map((c, index) => {
+          const field = fieldOf(c.field);
+          return <div key={c.id} className="condition-row">
+            {index > 0 && <span className="muted">{mode === "and" ? "かつ" : "または"}</span>}
+            <select value={c.field} onChange={(e) => changeField(c.id, e.target.value)}>{CUSTOMER_FIELDS.filter((f) => f.key !== "id").map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}</select>
+            <select value={c.op} onChange={(e) => updateCondition(c.id, { op: e.target.value as ConditionOp, a: "", b: "" })}>{opsFor(field?.kind ?? "text").map((o) => <option key={o.op} value={o.op}>{o.label}</option>)}</select>
+            {valueInputs(c)}
+            <button className="secondary" title="この条件を外す" onClick={() => setConditions((prev) => prev.filter((x) => x.id !== c.id))}>✕</button>
+          </div>;
+        })}
+        <button className="secondary" onClick={() => setConditions((prev) => [...prev, newCondition()])}>＋ 条件を追加</button>
+      </div>
+      {error ? <p className="error">{error}</p> : loading && !all ? <p className="muted">読込中…（全会員を読み込んでいます）</p> : rows.length === 0 ? <p className="muted">条件に一致するユーザーがいません</p> :
+      <div className="table-scroll tall" ref={scrollRef} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}><table className="freeze-col freeze-head"><thead><tr>{visibleFields.map((f) => (
+        <th key={f.key} onClick={() => toggleSort(f.key)} title="クリックで並び替え（未設定は常に末尾）" style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap", textAlign: rightAligned(f.kind) ? "right" : "left", color: sortKey === f.key ? "#ef5da8" : undefined }}>{f.label}{sortKey === f.key ? (sortDir === "desc" ? " ▼" : " ▲") : ""}</th>
+      ))}</tr></thead><tbody>
+        {first > 0 && <tr aria-hidden style={{ height: first * ROW_HEIGHT }}><td colSpan={visibleFields.length} style={{ padding: 0, border: 0 }} /></tr>}
+        {windowRows.map((row) => (
+          <tr key={row.id} onClick={() => setSelected(row)} style={{ cursor: "pointer", height: ROW_HEIGHT }} title="クリックで個別のご帰宅明細を表示">{visibleFields.map((f) => (
+            <td key={f.key} style={{ whiteSpace: "nowrap", textAlign: rightAligned(f.kind) ? "right" : "left", paddingTop: 6, paddingBottom: 6 }}>
+              {f.key === "name" ? <><b>{row.name}</b><small className="id">{row.id}</small></> : f.key === "rank" ? <span className={`text-rank ${row.rank}`}>{row.rank}</span> : displayValue(row, f, FORMAT)}
+            </td>
+          ))}</tr>
         ))}
-      </div>
-      {error ? <p className="error">{error}</p> : loading && !result ? <p className="muted">読込中…</p> : rows.length === 0 ? <p className="muted">条件に一致するユーザーがいません</p> :
-      <div className="table-scroll tall"><table className="freeze-col freeze-head"><thead><tr>{CUSTOMER_DB_COLUMNS.map((c) => (
-        <th key={String(c.key)} onClick={() => toggleSort(String(c.key))} title={SORTABLE_DB_KEYS.has(String(c.key)) ? "クリックで並び替え" : undefined} style={{ cursor: SORTABLE_DB_KEYS.has(String(c.key)) ? "pointer" : "default", userSelect: "none", whiteSpace: "nowrap", textAlign: rightAligned(c) ? "right" : "left", color: sortKey === c.key ? "#ef5da8" : undefined }}>{c.label}{sortKey === c.key ? (sortDir === "desc" ? " ▼" : " ▲") : ""}</th>
-      ))}</tr></thead><tbody>{rows.map((row) => (
-        <tr key={row.id} onClick={() => setSelected(row)} style={{ cursor: "pointer" }} title="クリックで個別のご帰宅明細を表示">{CUSTOMER_DB_COLUMNS.map((c) => (
-          <td key={String(c.key)} style={{ whiteSpace: "nowrap", textAlign: rightAligned(c) ? "right" : "left" }}>
-            {c.key === "name" ? <><b>{row.name}</b><small className="id">{row.id}</small></> : c.key === "rank" ? <span className={`text-rank ${row.rank}`}>{row.rank}</span> : cell(row, c)}
-          </td>
-        ))}</tr>
-      ))}</tbody></table></div>}
+        {last < rows.length && <tr aria-hidden style={{ height: (rows.length - last) * ROW_HEIGHT }}><td colSpan={visibleFields.length} style={{ padding: 0, border: 0 }} /></tr>}
+      </tbody></table></div>}
     </section>
     {selected && <CustomerDetail customer={selected} onClose={() => setSelected(null)} />}
   </>;

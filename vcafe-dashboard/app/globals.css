@@ -214,3 +214,14 @@ tbody tr:hover{background:#fdf7fc}
   .metrics,.grid-2{grid-template-columns:1fr}
   .rank-mix{grid-template-columns:repeat(2,1fr)}
 }
+
+/* ユーザーデータベース: 条件の組み立てと列の選択 */
+.condition-builder{align-items:center}
+.condition-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.condition-row select,.condition-row input{height:34px;border:1px solid #e7dced;border-radius:9px;padding:0 10px;color:var(--ink);background:#fff;font-size:12px}
+.condition-row input[type=number]{width:96px}
+.column-picker{position:relative}
+.column-picker summary{list-style:none;cursor:pointer;padding:8px 12px;border-radius:9px;font-size:12px}
+.column-picker summary::-webkit-details-marker{display:none}
+.column-picker-list{position:absolute;right:0;top:calc(100% + 6px);z-index:20;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;gap:6px;min-width:220px;max-height:60vh;overflow:auto;box-shadow:0 12px 32px rgba(40,20,60,.12)}
+.column-picker-list label{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--ink)}

@@ -161,3 +161,58 @@ export async function loadCustomers(query: CustomerQuery): Promise<CustomerListR
   const total = rows.length ? Number(rows[0].total) : 0;
   return { total, returned: customers.length, customers };
 }
+
+
+/**
+ * 全会員を一度に返す（ユーザーデータベース画面用）。絞り込み・並び替えは画面側（lib/customer-query.ts）で行う。
+ * 会員数は数千件規模で、1回の取得で全期間の課金集計を伴うため、同じインスタンス内では10分間使い回す。
+ */
+const ALL_CUSTOMERS_TTL_MS = 10 * 60 * 1000;
+const ALL_CUSTOMERS_MAX = 50000;
+let allCustomersCache: { at: number; value: CustomerListResult } | null = null;
+
+export async function loadAllCustomers(options: { refresh?: boolean } = {}): Promise<CustomerListResult & { cachedAt: string }> {
+  if (process.env.ANALYTICS_BACKEND !== "bigquery") {
+    const result = filterMock({ limit: MAX_LIMIT });
+    return { ...result, cachedAt: new Date().toISOString() };
+  }
+  if (!options.refresh && allCustomersCache && Date.now() - allCustomersCache.at < ALL_CUSTOMERS_TTL_MS) {
+    return { ...allCustomersCache.value, cachedAt: new Date(allCustomersCache.at).toISOString() };
+  }
+  const projectId = process.env.BIGQUERY_PROJECT_ID;
+  const dataset = process.env.BIGQUERY_DATASET;
+  if (!projectId || !dataset) throw new Error("BigQueryの環境変数が設定されていません");
+  const { BigQuery } = await import("@google-cloud/bigquery");
+  const bigquery = new BigQuery({ projectId });
+  const [rows] = await bigquery.query({
+    location: process.env.BIGQUERY_LOCATION || "asia-northeast1",
+    maximumBytesBilled: process.env.BIGQUERY_MAX_BYTES_BILLED || "1073741824",
+    query: `
+      WITH pay AS (
+        SELECT customerId, COUNT(*) AS paymentCount, SUM(amount) AS paymentAmount
+        FROM \`${projectId}.${dataset}.payments_current\` GROUP BY customerId
+      )
+      SELECT TO_JSON_STRING(t) AS payload FROM (
+        SELECT c.*, COALESCE(p.paymentCount, 0) AS paymentCount, COALESCE(p.paymentAmount, 0) AS paymentAmount
+        FROM \`${projectId}.${dataset}.customers_current\` c
+        LEFT JOIN pay p ON p.customerId = c.id
+      ) t
+      ORDER BY t.registeredAt
+      LIMIT ${ALL_CUSTOMERS_MAX}
+    `,
+  });
+  const customers = rows.map((row) => {
+    const value = JSON.parse(String(row.payload)) as Record<string, unknown>;
+    return {
+      ...value,
+      registeredAt: isoOf(value.registeredAt),
+      lastVisitAt: isoOf(value.lastVisitAt),
+      lastPaymentAt: isoOf(value.lastPaymentAt),
+      lastPurchasedItemAt: isoOf(value.lastPurchasedItemAt),
+      lastPresentAt: isoOf(value.lastPresentAt),
+    } as unknown as Customer;
+  });
+  const value = { total: customers.length, returned: customers.length, customers };
+  allCustomersCache = { at: Date.now(), value };
+  return { ...value, cachedAt: new Date(allCustomersCache.at).toISOString() };
+}
