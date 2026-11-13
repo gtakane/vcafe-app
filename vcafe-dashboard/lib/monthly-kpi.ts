@@ -28,7 +28,7 @@ export interface KpiColumn {
 
 /** 列の並びは運営のCSVと同じ（screenOnly を除く）。 */
 export const KPI_COLUMNS: KpiColumn[] = [
-  { key: "sales", label: "売上", format: "yen", definition: "経理と同じ計上方法の売上（税込）。購入額＋前月末の未使用残高−当月末の未使用残高。各社の報告額を登録するまでは暫定" },
+  { key: "sales", label: "売上", format: "yen", definition: "経理と同じ計上方法の売上（税抜。経理資料の「売上合計（税抜）」）。購入額＋前月末の未使用残高−当月末の未使用残高を税抜にしたもの。各社の報告額を登録するまでは暫定" },
   { key: "visits", label: "延べ客数", format: "decimal", definition: "通常ご帰宅の枠数（メイドお給仕ポータルの「ご帰宅枠数」と同じ。滞在時間÷20分、20分=1件・40分=2件・20分未満は0.5件）。2026年11月からは無料ご帰宅（1回を1件）も含める。予約・お試しは含めない" },
   { key: "normal", label: "うち通常", format: "decimal", definition: "通常ご帰宅（滞在時間÷20分で換算）。メイドお給仕ポータルの「ご帰宅枠数」の月合計にあたる（ポータルはテストユーザーを含む）", screenOnly: true },
   { key: "reservation", label: "うち予約", format: "count", definition: "予約ご帰宅（1回を1件）", screenOnly: true },

@@ -5,6 +5,7 @@ import { VISIT_COUNT_SQL } from "./summary-sql.ts";
 import { testUserCondition } from "./test-users.ts";
 import { loadBalances } from "./balances.ts";
 import { loadOfficialNews } from "./official-news.ts";
+import { excludingTax } from "./metrics.ts";
 
 /**
  * データから出す最初の月（サービス開始）。CSVの空欄を埋め、CSVの値と見比べるため全期間を出す。
@@ -209,7 +210,8 @@ async function loadKpiInputs(options: { includeTestUsers: boolean; now?: Date })
       const balances = await loadBalances(salesMonths, options.includeTestUsers);
       for (const month of balances.months) {
         if (!month.revenue) continue;
-        sales.set(month.month, { yen: month.revenue.total, provisional: month.status !== "confirmed", note: month.note });
+        // 運営のCSVの売上は税抜（経理の「売上合計（税抜）」と同じ）。月の確定売上の税抜で出す。
+        sales.set(month.month, { yen: month.revenueExcludingTax ?? excludingTax(month.revenue.total), provisional: month.status !== "confirmed", note: month.note });
       }
     } catch (error) {
       warnings.push("売上（未使用残高の記録）を取得できませんでした");

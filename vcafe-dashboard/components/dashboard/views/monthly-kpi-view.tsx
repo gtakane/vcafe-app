@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { EDITABLE_KEYS, KPI_COLUMNS, kpiCsv, parseKpiInput, type KpiCell, type KpiColumn, type KpiRow } from "@/lib/monthly-kpi";
 import type { MonthlyKpiResult } from "@/lib/monthly-kpi-loader";
 import { number, yen } from "../shared/format";
@@ -94,6 +94,59 @@ function EditCell({ column, cell, month, onDone, onCancel }: { column: KpiColumn
   </td>;
 }
 
+/** 列のまとまり。表の上のボタンで、そのまとまりの先頭の列まで横に移動する。 */
+const COLUMN_GROUPS: Array<{ label: string; key: string }> = [
+  { label: "売上・客数", key: "sales" },
+  { label: "UU・会員・課金", key: "uu" },
+  { label: "お試し・回数帯", key: "trial" },
+  { label: "お給仕時間・報酬・原価率", key: "serveHours" },
+  { label: "出来事・入店・退店", key: "events" },
+];
+
+/**
+ * 横に長い表のスクロール。表の上にも横スクロールバーを置き（下のバーと連動）、列のまとまりへ移動するボタンを付ける。
+ * 下のバーは表の一番下にあり、縦に長いと画面の外に出てしまうため。
+ */
+function useTwinScroll(deps: unknown[]) {
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const topRef = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const measure = () => setWidth(body.scrollWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(body);
+    const table = body.querySelector("table");
+    if (table) observer.observe(table);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  // 片方を動かすともう片方にも scroll イベントが出るため、こちらから動かした分のイベントは無視する（打ち消し合いを防ぐ）。
+  const echo = useRef({ top: false, body: false });
+  const follow = (from: "top" | "body") => {
+    const source = from === "top" ? topRef.current : bodyRef.current;
+    const target = from === "top" ? bodyRef.current : topRef.current;
+    if (!source || !target) return;
+    if (echo.current[from]) { echo.current[from] = false; return; }
+    if (Math.abs(target.scrollLeft - source.scrollLeft) < 1) return;
+    echo.current[from === "top" ? "body" : "top"] = true;
+    target.scrollLeft = source.scrollLeft;
+  };
+  const jumpTo = (key: string) => {
+    const body = bodyRef.current;
+    const th = body?.querySelector<HTMLElement>(`th[data-key="${key}"]`);
+    const sticky = body?.querySelector<HTMLElement>("thead .kpi-sticky");
+    if (body && th) body.scrollTo({ left: th.offsetLeft - (sticky?.offsetWidth ?? 0), behavior: "smooth" });
+  };
+  return {
+    bodyRef, topRef, width, jumpTo,
+    onBodyScroll: () => follow("body"),
+    onTopScroll: () => follow("top"),
+  };
+}
+
 // 月次指標。運営が毎月作っていたCSVと同じ項目を、月ごとに1行で並べる。
 export default function MonthlyKpiView({ onExport }: { onExport: (name: string, data: Array<Array<string | number>>) => void }) {
   const includeTestUsers = useIncludeTestUsers();
@@ -118,6 +171,7 @@ export default function MonthlyKpiView({ onExport }: { onExport: (name: string, 
   }, [includeTestUsers, request]);
 
   const rows: KpiRow[] = data?.rows ?? [];
+  const scroll = useTwinScroll([rows.length, editing]);
   return <>
     <section className="panel table-panel">
       <div className="panel-head">
@@ -131,13 +185,19 @@ export default function MonthlyKpiView({ onExport }: { onExport: (name: string, 
           <button className="secondary" disabled={!rows.length} onClick={() => onExport(`monthly-kpi_${includeTestUsers ? "with-test-users" : "without-test-users"}.csv`, kpiCsv(rows))}>CSV出力（運営のCSVと同じ並び）</button>
         </div>
       </div>
-      {data?.historyCutoff && <p className="kpi-legend">テストユーザーの切り替えで変わるのは、データから算出した値（{data.historyCutoff.replace("-", "年")}月より後の月と、CSVに無い項目）だけです。CSVの値は切り替えても変わらず、「≠」の比較相手だけが変わります。</p>}
       {data?.warnings?.length ? <ul className="kpi-warnings">{data.warnings.map((w) => <li key={w}>{w}</li>)}</ul> : null}
-      <p className="kpi-legend"><sup className="kpi-diff">≠</sup> CSVの値と、データから出し直した値が違う（マウスを乗せると出し直した値）　<small className="kpi-provisional">暫定</small> 各社の報告額が未登録、または月の途中　<span className="kpi-manual-sample">金色の下線</span> 手入力の値</p>
-      <p className="kpi-legend">セルをクリックして値を入力し、Enterで保存（Escで取消）。空にして保存するか「手入力を消す」で、CSV・データの値に戻ります。手入力の値はCSV・データより優先し、テストユーザーの切り替えに関係なく同じ値を表示します。比率（客単価・ARPPU・原価率など）は、入力した値から計算し直します。</p>
+      <p className="kpi-legend"><sup className="kpi-diff">≠</sup> CSVの値と、データから出し直した値が違う　<small className="kpi-provisional">暫定</small> 各社の報告額が未登録、または月の途中　<span className="kpi-manual-sample">金色の下線</span> 手入力の値　（売上は税抜）</p>
+      <details className="kpi-help"><summary>表の見方・手入力のしかた</summary>
+        <p>セルをクリックして値を入力し、Enterで保存（Escで取消）。空にして保存するか「手入力を消す」で、CSV・データの値に戻ります。手入力の値はCSV・データより優先し、テストユーザーの切り替えに関係なく同じ値を表示します。比率（客単価・ARPPU・原価率など）は、入力した値から計算し直します。</p>
+        <p>「≠」のセルにマウスを乗せると、データから出し直した値が出ます。{data?.historyCutoff ? `テストユーザーの切り替えで変わるのは、データから算出した値（${data.historyCutoff.replace("-", "年")}月より後の月と、CSVに無い項目）だけです。CSVの値は切り替えても変わりません。` : ""}</p>
+        <p>横の移動は、表の上のボタン、表の上下にある横スクロールバー、またはShiftを押しながらマウスホイールで行えます。</p>
+      </details>
       {error ? <p className="error">{error}</p> : loading && !data ? <p className="muted">読込中…（数十秒かかることがあります）</p> :
-      <div className="table-scroll kpi-scroll"><table className="kpi-table">
-        <thead><tr><th className="kpi-sticky">年月</th>{KPI_COLUMNS.map((c, index) => <th key={`${c.key}-${index}`} title={c.definition} className={c.screenOnly ? "kpi-extra" : undefined}>{c.label}</th>)}</tr></thead>
+      <>
+      <div className="kpi-jump" role="group" aria-label="列のまとまりへ移動">{COLUMN_GROUPS.map((g) => <button key={g.key} type="button" className="secondary" onClick={() => scroll.jumpTo(g.key)}>{g.label}</button>)}</div>
+      <div className="kpi-topscroll" ref={scroll.topRef} onScroll={scroll.onTopScroll} aria-hidden="true"><div style={{ width: scroll.width, height: 1 }} /></div>
+      <div className="table-scroll kpi-scroll" ref={scroll.bodyRef} onScroll={scroll.onBodyScroll}><table className="kpi-table">
+        <thead><tr><th className="kpi-sticky">年月</th>{KPI_COLUMNS.map((c, index) => <th key={`${c.key}-${index}`} data-key={c.key} title={c.definition} className={c.screenOnly ? "kpi-extra" : undefined}>{c.label}</th>)}</tr></thead>
         <tbody>{rows.map((row) => <tr key={row.month}><th className="kpi-sticky">{row.month.replace("-", "/")}</th>{KPI_COLUMNS.map((c, index) => {
           const isEditing = editing?.month === row.month && editing.key === c.key;
           if (isEditing) return <EditCell key={`${c.key}-${index}`} column={c} cell={row.cells[c.key]} month={row.month}
@@ -145,7 +205,8 @@ export default function MonthlyKpiView({ onExport }: { onExport: (name: string, 
             onDone={() => { setEditing(null); setNotice(`${row.month.replace("-", "/")} の${c.label}を保存しました`); setRequest((r) => ({ n: r.n + 1, refresh: false })); }} />;
           return <Cell key={`${c.key}-${index}`} column={c} cell={row.cells[c.key]} onEdit={EDITABLE_KEYS.has(c.key) ? () => { setNotice(""); setEditing({ month: row.month, key: c.key }); } : undefined} />;
         })}</tr>)}</tbody>
-      </table></div>}
+      </table></div>
+      </>}
     </section>
     <section className="panel">
       <div className="panel-head"><div><p className="eyebrow">DEFINITIONS</p><h2>各指標の定義</h2></div></div>
