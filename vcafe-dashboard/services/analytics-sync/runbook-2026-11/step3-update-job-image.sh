@@ -6,7 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 cd "${DASHBOARD_DIR}"
 
 if ! SCHEMA_OUT=$(bash "${SYNC_DIR}/check-bigquery-schema.sh" 2>&1); then
-  echo "${SCHEMA_OUT}" | grep -E "★|BigQuery に" || echo "${SCHEMA_OUT}" | tail -5
+  echo "${SCHEMA_OUT}" | grep -E "★|BigQuery に|manifest に無い列" || echo "${SCHEMA_OUT}" | tail -5
   echo
   echo "BigQuery の表・列がそろっていないため、差し替えを中止しました（何も変更していません）。"
   echo "手順書の付録の初回設定（step9・step11・step12）が済んでいるか確認してください。"

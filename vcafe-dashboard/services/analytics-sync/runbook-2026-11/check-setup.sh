@@ -11,8 +11,8 @@ echo "=== 1. BigQuery の表と列（step9・step11・step12） ==="
 if OUT=$(bash "${SYNC_DIR}/check-bigquery-schema.sh" 2>&1); then
   ok "すべての表・列がそろっています"
 else
-  echo "${OUT}" | grep -E "BigQuery に" | sed 's/^/       /'
-  ng "表・列が足りません" "付録の初回設定（step9-test-user-columns.sh・step11-monthly-kpi-tables.sh・step12-kpi-manual-input.sh）を実行する"
+  echo "${OUT}" | grep -E "BigQuery に|manifest に無い列|★" | sed 's/^/       /'
+  ng "表・列が想定と違います" "付録の初回設定（step9-test-user-columns.sh・step11-monthly-kpi-tables.sh・step12-kpi-manual-input.sh）を実行する"
 fi
 
 echo "=== 2. 運営の月次CSVの取り込み ==="
