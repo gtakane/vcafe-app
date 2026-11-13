@@ -54,7 +54,7 @@ export const KPI_COLUMNS: KpiColumn[] = [
   { key: "b5Users", label: "50〜", format: "count", definition: "その月に通常ご帰宅を50回以上したユーザーの数" },
   { key: "b5Visits", label: "総数", format: "count", definition: "50回以上のユーザーの通常ご帰宅の回数の合計" },
   { key: "serveHours", label: "お給仕時間", format: "hours", definition: "ご帰宅の滞在時間の合計（メイドがご帰宅でお給仕した時間）" },
-  { key: "maidReward", label: "メイド報酬", format: "yen", definition: "手入力（runbook-2026-11/set-maid-reward.sh）" },
+  { key: "maidReward", label: "メイド報酬", format: "yen", definition: "手入力（表のセルをクリックして入力）" },
   { key: "profit", label: "差額", format: "yen", definition: "売上 − メイド報酬" },
   { key: "costRate", label: "原価率", format: "pct", definition: "メイド報酬 ÷ 売上" },
   { key: "events", label: "出来事", format: "text", definition: "公式サイトのお知らせのうち、その月に公開された記事" },
@@ -97,6 +97,8 @@ export interface KpiCell {
   source: "csv" | "auto" | "manual" | "derived" | "none";
   /** CSVの月で、データから出し直した値（比較用）。 */
   recomputed?: number | string | null;
+  /** 手入力の値で上書きしたとき、上書き前の値（CSV・データ・計算）。 */
+  original?: number | string | null;
   /** CSVの値と出し直した値が食い違う。 */
   differs?: boolean;
   provisional?: boolean;
@@ -104,6 +106,34 @@ export interface KpiCell {
 }
 
 export interface KpiRow { month: string; cells: Record<KpiKey, KpiCell> }
+
+/** 画面で手入力できる列（運営のCSVにある列すべて。画面だけの内訳列は除く）。 */
+export const EDITABLE_KEYS: ReadonlySet<KpiKey> = new Set(KPI_COLUMNS.filter((c) => !c.screenOnly).map((c) => c.key));
+
+/** 手入力の値。月 → 列 → 値。 */
+export type KpiOverrides = Map<string, Map<KpiKey, number | string>>;
+
+/**
+ * 画面で入力された文字を値にする。空なら null（手入力を消す）。
+ * 金額の ¥・円・桁区切り、件・h、括弧のマイナスを受け付ける。率は「69%」「69」「0.69」のどれでもよい（1より大きければ%とみなす）。
+ */
+export function parseKpiInput(column: Pick<KpiColumn, "format">, text: string): { ok: true; value: number | string | null } | { ok: false; error: string } {
+  const raw = text.trim();
+  if (!raw) return { ok: true, value: null };
+  if (column.format === "text") {
+    if (raw.length > 2000) return { ok: false, error: "2,000文字以内で入力してください" };
+    return { ok: true, value: raw };
+  }
+  let cleaned = raw.normalize("NFKC").replace(/[¥￥,円件人回h\s]/g, "");
+  const negative = /^\(.*\)$/.test(cleaned) || cleaned.startsWith("-") || cleaned.startsWith("▲");
+  cleaned = cleaned.replace(/^[(▲-]+|\)$/g, "");
+  const percent = cleaned.endsWith("%");
+  cleaned = cleaned.replace(/%$/, "");
+  if (!/^\d+(\.\d+)?$/.test(cleaned)) return { ok: false, error: "数値を入力してください（例: 1,983,558 / 69%）" };
+  let value = Number(cleaned) * (negative ? -1 : 1);
+  if (column.format === "pct" && (percent || Math.abs(value) > 1)) value /= 100;
+  return { ok: true, value };
+}
 
 /** 延べ客数に無料ご帰宅を含め始める月（無料ご帰宅3種は2026年11月6日開始。それより前の月は通常ご帰宅だけ）。 */
 export const FREE_IN_VISITS_FROM = "2026-11";
@@ -143,7 +173,7 @@ export function autoValues(auto: AutoMonth | undefined, sales: MonthSales | unde
  * 比率・差額の計算式（運営のCSVと同じ）。CSVにこの列が無い月は、表示している基礎の値
  * （CSVの値、無ければデータから算出した値）から計算する。例: 2026年7〜9月の ARPPU = CSVの売上 ÷ CSVの UU。
  */
-const DERIVED: Partial<Record<KpiNumberKey, { inputs: KpiNumberKey[]; compute: (v: Record<string, number>) => number | null }>> = {
+export const DERIVED: Partial<Record<KpiNumberKey, { inputs: KpiNumberKey[]; compute: (v: Record<string, number>) => number | null }>> = {
   unitPrice: { inputs: ["sales", "visits"], compute: (v) => ratio(v.sales, v.visits) },
   avgVisits: { inputs: ["visits", "uu"], compute: (v) => ratio(v.visits, v.uu) },
   pur: { inputs: ["uu", "members"], compute: (v) => ratio(v.uu, v.members) },
@@ -171,6 +201,8 @@ export function buildMonthlyKpi(input: {
   maids: MaidMove[];
   /** これ以前（を含む）の月はCSVを正とする。CSVが未登録なら null。 */
   historyCutoff: string | null;
+  /** 画面で手入力した値。CSV・データより優先する。 */
+  overrides?: KpiOverrides;
 }): KpiRow[] {
   return input.months.map((month) => {
     const history = input.history.get(month);
@@ -213,17 +245,24 @@ export function buildMonthlyKpi(input: {
         ...(dependsOnSales && sales?.provisional && computed != null ? { provisional: true, note: sales.note } : {}),
       };
     }
-    // CSVに比率・差額が無い月は、表示している基礎の値から計算し直す（CSVの売上がある月の ARPPU など）。
+    // 手入力の値で上書きする（CSV・データより優先）。
+    for (const [key, value] of input.overrides?.get(month) ?? []) {
+      if (!cells[key]) continue;
+      cells[key] = { value, source: "manual", original: cells[key].value };
+    }
+    // CSVや手入力に比率・差額が無い月は、表示している基礎の値から計算し直す
+    // （CSVの売上がある月の ARPPU、手入力したメイド報酬からの原価率など）。
     for (const [key, rule] of Object.entries(DERIVED) as Array<[KpiNumberKey, NonNullable<(typeof DERIVED)[KpiNumberKey]>]>) {
-      if (cells[key].source === "csv") continue;
+      if (cells[key].source === "csv" || cells[key].source === "manual") continue;
       const inputs = rule.inputs.map((input) => cells[input]);
       if (inputs.some((cell) => typeof cell.value !== "number")) continue;
-      if (!inputs.some((cell) => cell.source === "csv")) continue; // すべてデータ由来なら上で計算済み
+      if (!inputs.some((cell) => cell.source === "csv" || cell.source === "manual")) continue; // すべてデータ由来なら上で計算済み
       const bases = Object.fromEntries(rule.inputs.map((input) => [input, cells[input].value as number]));
       const value = rule.compute(bases);
       if (value == null) continue;
+      const kinds = [inputs.some((c) => c.source === "csv") ? "CSV" : "", inputs.some((c) => c.source === "manual") ? "手入力" : ""].filter(Boolean).join("・");
       cells[key] = {
-        value, source: "derived", note: `CSVの値を含む ${rule.inputs.map((i) => KPI_COLUMNS.find((c) => c.key === i)?.label).join("・")} から計算`,
+        value, source: "derived", note: `${kinds}の値を含む ${rule.inputs.map((i) => KPI_COLUMNS.find((c) => c.key === i)?.label).join("・")} から計算`,
         ...(inputs.some((cell) => cell.provisional) ? { provisional: true } : {}),
       };
     }

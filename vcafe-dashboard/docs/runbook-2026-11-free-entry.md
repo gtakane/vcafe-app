@@ -189,6 +189,15 @@ cd ~/vcafe-app && git pull --ff-only
 | 5 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step3-update-job-image.sh` | 同期プログラムの差し替え（以降テストユーザーも取り込む） |
 | 6 | `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step10-import-test-users.sh` | テストユーザーの過去分を取り込む |
 
-毎月: `set-maid-reward.sh 2026-11 <メイド報酬の合計>`（メイド報酬）、`set-platform-purchases.sh`（各社の報告額。売上が確定になる）。
+毎月: メイド報酬は月次指標の表のセルをクリックして入力（`set-maid-reward.sh` でも可）。`set-platform-purchases.sh`（各社の報告額。売上が確定になる）。
+
+### 月次指標の手入力（2026-11-13）
+
+月次指標の表のセルをクリックすると、その月・その列の値を入力できる（管理者のみ・運営のCSVにある列すべて）。
+手入力の値はCSV・データより優先し、比率（客単価・ARPPU・ARPU・PUR・差額・原価率）は入力した値から計算し直す。
+空にして保存するか「手入力を消す」で元の値に戻る。値は `monthly_kpi_overrides` に追記され、履歴（誰が・いつ）が残る。
+
+初回だけ: `bash ~/vcafe-app/vcafe-dashboard/services/analytics-sync/runbook-2026-11/step12-kpi-manual-input.sh`
+（表を作り、ダッシュボードの実行SAに**この表だけ**書き込み権限を付ける。ほかの表は読み取りのまま）→ ダッシュボードを配備。
 
 > CSV は売上・報酬・メイド名を含むため、公開リポジトリには置かない（Cloud Shell にアップロードして取り込むだけ）。

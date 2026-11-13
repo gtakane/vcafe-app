@@ -173,6 +173,19 @@ CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.monthly_kpi_manual` (
   enteredAt TIMESTAMP NOT NULL
 );
 
+-- 月次指標の手入力（ダッシュボードの月次指標の表から入力。2026-11-13〜）。追記のみで、列ごとに最新の1件を使う。
+-- cleared=true はその列の手入力を消して CSV・データの値に戻す。ダッシュボードの実行SAにこの表だけ書き込み権限を付ける
+-- （runbook-2026-11/step12-kpi-manual-input.sh）。
+CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.monthly_kpi_overrides` (
+  month STRING NOT NULL,
+  field STRING NOT NULL,
+  numberValue FLOAT64,
+  textValue STRING,
+  cleared BOOL,
+  enteredAt TIMESTAMP NOT NULL,
+  enteredBy STRING
+);
+
 -- 各社の報告による月の購入額（手数料控除後・経理が使う値）。手入力（runbook-2026-11/set-platform-purchases.sh）。
 -- Apple は App Store の会計月、Google・Stripe は暦月。登録が無い月は課金台帳から推定する。
 CREATE TABLE IF NOT EXISTS `PROJECT_ID.DATASET_ID.platform_purchases` (

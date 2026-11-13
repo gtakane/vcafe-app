@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { autoValues, buildMonthlyKpi, differs, KPI_COLUMNS, kpiCsv, monthRange, visitsOfMonth, type AutoMonth } from "../lib/monthly-kpi.ts";
+import { autoValues, buildMonthlyKpi, differs, EDITABLE_KEYS, KPI_COLUMNS, kpiCsv, monthRange, parseKpiInput, visitsOfMonth, type AutoMonth, type KpiKey } from "../lib/monthly-kpi.ts";
 import { parseNewsHtml } from "../lib/official-news.ts";
 
 const auto = (month: string, over: Partial<AutoMonth> = {}): AutoMonth => ({
@@ -134,4 +134,59 @@ test("CSVに比率が無い月は、表示している基礎の値（CSVの売�
   // CSVにある比率はそのまま
   assert.equal(sep.cells.unitPrice.value, 773);
   assert.equal(sep.cells.unitPrice.source, "csv");
+});
+
+test("手入力の値はCSV・データより優先し、比率は手入力の値から計算し直す", () => {
+  const overrides = new Map([
+    ["2026-11", new Map<KpiKey, number | string>([["maidReward", 2000000], ["events", "横浜メイド博"]])],
+    ["2026-10", new Map<KpiKey, number | string>([["sales", 3289514], ["uu", 220]])],
+  ]);
+  const [nov, oct] = buildMonthlyKpi({
+    months: ["2026-11", "2026-10"],
+    auto: new Map([["2026-10", auto("2026-10", { normal: 3536 })], ["2026-11", auto("2026-11")]]),
+    sales: new Map([["2026-11", { yen: 3000000, provisional: true, note: "暫定" }]]), manualReward: new Map(),
+    history: new Map([["2026-10", { month: "2026-10", visits: 3536, uu: 200, maidReward: 1900000 }]]),
+    news: [{ date: "2026-11-06", title: "【6周年記念】新情報のお知らせ", url: "https://virtual.cafe-athome.com/news/20261106" }],
+    maids: [], historyCutoff: "2026-10", overrides,
+  });
+  // 11月: メイド報酬を手入力 → 差額・原価率がそこから計算され、売上が暫定なので暫定のまま
+  assert.equal(nov.cells.maidReward.source, "manual");
+  assert.equal(nov.cells.maidReward.original, null);
+  assert.equal(nov.cells.profit.value, 1000000);
+  assert.equal(nov.cells.profit.source, "derived");
+  assert.equal(nov.cells.profit.provisional, true);
+  assert.equal(nov.cells.costRate.value, 2000000 / 3000000);
+  assert.equal(nov.cells.events.value, "横浜メイド博"); // 公式サイトのお知らせより手入力を優先
+  assert.equal(nov.cells.events.original, "【6周年記念】新情報のお知らせ");
+  // 10月: CSVの空欄（売上）を埋め、CSVの UU を上書き → ARPPU・客単価・原価率を計算し直す
+  assert.equal(oct.cells.sales.source, "manual");
+  assert.equal(oct.cells.uu.value, 220);
+  assert.equal(oct.cells.uu.original, 200);
+  assert.equal(oct.cells.arppu.value, 3289514 / 220);
+  assert.equal(oct.cells.unitPrice.value, 3289514 / 3536);
+  assert.equal(oct.cells.costRate.value, 1900000 / 3289514);
+  assert.ok(oct.cells.arppu.note?.includes("手入力"));
+  // CSV出力にも手入力の値が入る
+  const csv = kpiCsv([nov, oct]);
+  assert.equal(csv[1][1], 3289514);
+});
+
+test("手入力できるのは運営のCSVにある列だけ（画面だけの内訳列は除く）", () => {
+  assert.ok(EDITABLE_KEYS.has("maidReward"));
+  assert.ok(EDITABLE_KEYS.has("events"));
+  assert.ok(!EDITABLE_KEYS.has("normal"));
+  assert.ok(!EDITABLE_KEYS.has("reservation"));
+});
+
+test("手入力の文字の読み取り（桁区切り・¥・括弧のマイナス・%・全角）", () => {
+  const yen = { format: "yen" as const }, pct = { format: "pct" as const }, text = { format: "text" as const };
+  assert.deepEqual(parseKpiInput(yen, "¥1,983,558"), { ok: true, value: 1983558 });
+  assert.deepEqual(parseKpiInput(yen, "(¥132,000)"), { ok: true, value: -132000 });
+  assert.deepEqual(parseKpiInput(yen, "１９８３５５８"), { ok: true, value: 1983558 });
+  assert.deepEqual(parseKpiInput(pct, "69%"), { ok: true, value: 0.69 });
+  assert.deepEqual(parseKpiInput(pct, "69"), { ok: true, value: 0.69 });
+  assert.deepEqual(parseKpiInput(pct, "0.69"), { ok: true, value: 0.69 });
+  assert.deepEqual(parseKpiInput(yen, ""), { ok: true, value: null }); // 空は手入力を消す
+  assert.deepEqual(parseKpiInput(text, "  横浜メイド博 "), { ok: true, value: "横浜メイド博" });
+  assert.equal(parseKpiInput(yen, "未定").ok, false);
 });

@@ -254,3 +254,17 @@ tbody tr:hover{background:#fdf7fc}
 .kpi-definitions{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px 18px;margin:0 0 10px}
 .kpi-definitions dt{font-weight:800;font-size:12px}
 .kpi-definitions dd{margin:2px 0 0;color:var(--muted);font-size:11px;line-height:1.5}
+
+/* 月次指標の手入力 */
+.kpi-table td.kpi-editable{cursor:pointer}
+.kpi-table td.kpi-editable:hover{background:#f3f1fb}
+.kpi-table td.manual{background:#fdf9ec;box-shadow:inset 0 -2px 0 #c9a227;color:var(--ink)}
+.kpi-manual-sample{box-shadow:inset 0 -2px 0 #c9a227;background:#fdf9ec;padding:0 4px}
+.kpi-table td.kpi-editing{min-width:200px;background:#fff;box-shadow:inset 0 0 0 2px #6b5bd2;vertical-align:top}
+.kpi-editing form{display:grid;gap:5px}
+.kpi-editing input,.kpi-editing textarea{width:100%;box-sizing:border-box;font:inherit;padding:5px 7px;border:1px solid var(--line);border-radius:6px;text-align:right}
+.kpi-editing textarea{text-align:left;resize:vertical}
+.kpi-edit-actions{display:flex;gap:4px;flex-wrap:wrap}
+.kpi-edit-actions button{font-size:11px;padding:4px 8px}
+.kpi-editing small{font-size:10px;white-space:normal}
+.kpi-saved{color:#4a5a8a;font-weight:700}

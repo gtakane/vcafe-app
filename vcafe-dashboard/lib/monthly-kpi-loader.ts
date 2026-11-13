@@ -1,6 +1,6 @@
 // 月次指標の読み込み（BigQuery・公式サイト）。組み立ては lib/monthly-kpi.ts の純関数で行う。
 
-import { buildMonthlyKpi, monthRange, type AutoMonth, type HistoryRow, type KpiRow, type MaidMove, type MonthSales, KPI_COLUMNS } from "./monthly-kpi.ts";
+import { buildMonthlyKpi, monthRange, type AutoMonth, type HistoryRow, type KpiKey, type KpiOverrides, type KpiRow, type MaidMove, type MonthSales, type NewsItem, EDITABLE_KEYS, KPI_COLUMNS } from "./monthly-kpi.ts";
 import { VISIT_COUNT_SQL } from "./summary-sql.ts";
 import { testUserCondition } from "./test-users.ts";
 import { loadBalances } from "./balances.ts";
@@ -8,11 +8,24 @@ import { loadOfficialNews } from "./official-news.ts";
 
 /**
  * データから出す最初の月（サービス開始）。CSVの空欄を埋め、CSVの値と見比べるため全期間を出す。
- * 全期間を読むため、結果は10分間使い回す（refresh で読み直し）。
+ * 全期間を読むため、データの集計は10分間使い回す（refresh で読み直し）。手入力の値は毎回読む（入力をすぐ反映するため）。
  */
 export const AUTO_FROM = "2020-11";
 const CACHE_MS = 10 * 60 * 1000;
-const cache = new Map<string, { at: number; value: MonthlyKpiResult }>();
+
+/** 手入力の値以外（集計に時間がかかる部分）。 */
+interface KpiInputs {
+  months: string[];
+  auto: Map<string, AutoMonth>;
+  sales: Map<string, MonthSales>;
+  history: Map<string, HistoryRow>;
+  news: NewsItem[];
+  maids: MaidMove[];
+  historyCutoff: string | null;
+  autoFrom: string;
+  warnings: string[];
+}
+const cache = new Map<string, { at: number; value: KpiInputs }>();
 /** 月の確定売上を出せる最初の月（経理の11/1の残高を基準値にしている）。 */
 const FIRST_SALES_MONTH = "2026-11";
 
@@ -26,37 +39,95 @@ export interface MonthlyKpiResult {
 
 const businessMonth = (column: string) => `FORMAT_DATE("%Y-%m", DATE(TIMESTAMP_SUB(${column}, INTERVAL 2 HOUR), "Asia/Tokyo"))`;
 
-export async function loadMonthlyKpi(options: { includeTestUsers: boolean; refresh?: boolean; now?: Date }): Promise<MonthlyKpiResult & { cachedAt: string }> {
-  const cacheKey = options.includeTestUsers ? "include" : "exclude";
-  const cached = cache.get(cacheKey);
-  if (!options.refresh && !options.now && cached && Date.now() - cached.at < CACHE_MS) return { ...cached.value, cachedAt: new Date(cached.at).toISOString() };
-  const value = await loadMonthlyKpiUncached(options);
-  const at = Date.now();
-  cache.set(cacheKey, { at, value });
-  return { ...value, cachedAt: new Date(at).toISOString() };
-}
-
-async function loadMonthlyKpiUncached(options: { includeTestUsers: boolean; now?: Date }): Promise<MonthlyKpiResult> {
+async function bigQueryContext() {
   const projectId = process.env.BIGQUERY_PROJECT_ID;
   const dataset = process.env.BIGQUERY_DATASET;
   if (!projectId || !dataset) throw new Error("BigQueryの環境変数が設定されていません");
   const { BigQuery } = await import("@google-cloud/bigquery");
-  const bigquery = new BigQuery({ projectId });
-  const location = process.env.BIGQUERY_LOCATION || "asia-northeast1";
-  const maximumBytesBilled = process.env.BIGQUERY_MAX_BYTES_BILLED || "1073741824";
+  return {
+    bigquery: new BigQuery({ projectId }),
+    location: process.env.BIGQUERY_LOCATION || "asia-northeast1",
+    maximumBytesBilled: process.env.BIGQUERY_MAX_BYTES_BILLED || "1073741824",
+    t: (name: string) => `\`${projectId}.${dataset}.${name}\``,
+  };
+}
+
+export async function loadMonthlyKpi(options: { includeTestUsers: boolean; refresh?: boolean; now?: Date }): Promise<MonthlyKpiResult & { cachedAt: string }> {
+  const cacheKey = options.includeTestUsers ? "include" : "exclude";
+  let entry = cache.get(cacheKey);
+  if (options.refresh || options.now || !entry || Date.now() - entry.at >= CACHE_MS) {
+    entry = { at: Date.now(), value: await loadKpiInputs(options) };
+    cache.set(cacheKey, entry);
+  }
+  const inputs = entry.value;
+  const warnings = [...inputs.warnings];
+  const overrides = await loadOverrides().catch((error) => {
+    warnings.push("手入力の値を取得できませんでした（runbook-2026-11/step12-kpi-manual-input.sh が未実行の可能性があります）");
+    console.warn(`MONTHLY_KPI_OVERRIDES ${(error as Error).message}`);
+    return new Map() as KpiOverrides;
+  });
+  const rows = buildMonthlyKpi({ ...inputs, manualReward: new Map(), overrides });
+  return { rows, historyCutoff: inputs.historyCutoff, autoFrom: inputs.autoFrom, includeTestUsers: options.includeTestUsers, warnings, cachedAt: new Date(entry.at).toISOString() };
+}
+
+/**
+ * 手入力の値（列ごとの最新の1件。消した列は除く）。以前の set-maid-reward.sh の表（monthly_kpi_manual）も読む。
+ */
+async function loadOverrides(): Promise<KpiOverrides> {
+  const { bigquery, location, t } = await bigQueryContext();
+  const [rows] = await bigquery.query({ location, query: `
+    WITH all_rows AS (
+      SELECT month, field, numberValue, textValue, COALESCE(cleared, FALSE) AS cleared, enteredAt FROM ${t("monthly_kpi_overrides")}
+      UNION ALL
+      SELECT month, "maidReward", maidReward, CAST(NULL AS STRING), FALSE, enteredAt FROM ${t("monthly_kpi_manual")}
+    )
+    SELECT month, field, numberValue, textValue, cleared FROM all_rows
+    WHERE TRUE
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY month, field ORDER BY enteredAt DESC) = 1` });
+  const overrides: KpiOverrides = new Map();
+  for (const row of rows as Array<Record<string, unknown>>) {
+    const key = String(row.field) as KpiKey;
+    if (row.cleared || !EDITABLE_KEYS.has(key)) continue;
+    const value = row.textValue != null ? String(row.textValue) : row.numberValue != null ? Number(row.numberValue) : null;
+    if (value == null) continue;
+    const month = String(row.month);
+    if (!overrides.has(month)) overrides.set(month, new Map());
+    overrides.get(month)!.set(key, value);
+  }
+  return overrides;
+}
+
+/** 手入力の値を保存する（value が null なら、その列の手入力を消してCSV・データの値に戻す）。追記のみで、履歴は残る。 */
+export async function saveKpiOverride(input: { month: string; field: KpiKey; value: number | string | null; enteredBy: string }): Promise<void> {
+  const { bigquery, location, t } = await bigQueryContext();
+  await bigquery.query({
+    location,
+    query: `INSERT INTO ${t("monthly_kpi_overrides")} (month, field, numberValue, textValue, cleared, enteredAt, enteredBy)
+            VALUES (@month, @field, @numberValue, @textValue, @cleared, CURRENT_TIMESTAMP(), @enteredBy)`,
+    params: {
+      month: input.month, field: input.field,
+      numberValue: typeof input.value === "number" ? input.value : null,
+      textValue: typeof input.value === "string" ? input.value : null,
+      cleared: input.value == null, enteredBy: input.enteredBy,
+    },
+    types: { numberValue: "FLOAT64", textValue: "STRING" },
+  });
+}
+
+async function loadKpiInputs(options: { includeTestUsers: boolean; now?: Date }): Promise<KpiInputs> {
+  const { bigquery, location, maximumBytesBilled, t } = await bigQueryContext();
   const now = options.now ?? new Date();
   const currentMonth = new Date(now.getTime() + 7 * 3600000).toISOString().slice(0, 7); // 営業日（JST-2h）の月
   const autoFrom = AUTO_FROM;
   const autoMonths = monthRange(autoFrom, currentMonth);
   const params = { from: `${autoFrom}-01`, to: `${currentMonth}-28`, months: autoMonths, includeTestUsers: options.includeTestUsers };
-  const t = (name: string) => `\`${projectId}.${dataset}.${name}\``;
   const run = async (query: string) => (await bigquery.query({ location, params, maximumBytesBilled, query }))[0] as Array<Record<string, unknown>>;
   const warnings: string[] = [];
   const optional = async (label: string, query: string) => {
     try { return await run(query); } catch (error) { warnings.push(`${label}を取得できませんでした`); console.warn(`MONTHLY_KPI_${label} ${(error as Error).message}`); return []; }
   };
 
-  const [visitRows, photoRows, presentRows, memberRows, maidRows, historyRows, rewardRows] = await Promise.all([
+  const [visitRows, photoRows, presentRows, memberRows, maidRows, historyRows] = await Promise.all([
     // ご帰宅の集計と回数帯を1回の読み取りで出す（全期間を読むため、同じ表を2回読まない）。
     // 回数帯: 通常ご帰宅の回数（実回数）で分け、その人たちの通常ご帰宅の回数を足す
     // （運営のCSVの「総数」は回数。枠数で足すと40分のご帰宅の分だけ多くなる）。
@@ -104,7 +175,6 @@ async function loadMonthlyKpiUncached(options: { includeTestUsers: boolean; now?
       SELECT m.name, m.status, ${businessMonth("s.firstAt")} AS firstMonth, ${businessMonth("s.lastAt")} AS lastMonth
       FROM s JOIN ${t("maids_current")} m ON m.id = s.maidId`),
     optional("CSVの記録", `SELECT * FROM ${t("monthly_kpi_history")}`),
-    optional("メイド報酬", `SELECT month, maidReward FROM ${t("monthly_kpi_manual")}`),
   ]);
 
   const n = (value: unknown) => (value == null ? 0 : Number(value) || 0);
@@ -158,7 +228,6 @@ async function loadMonthlyKpiUncached(options: { includeTestUsers: boolean; now?
     history.set(month, record);
   }
   const historyCutoff = [...history.keys()].sort().at(-1) ?? null;
-  const manualReward = new Map(rewardRows.map((r) => [String(r.month), n(r.maidReward)]));
 
   // 出来事: CSVの無い月（自動の月）の年だけ公式サイトから取る。
   const newsYears = [...new Set(autoMonths.filter((month) => !historyCutoff || month > historyCutoff).map((month) => Number(month.slice(0, 4))))];
@@ -172,7 +241,6 @@ async function loadMonthlyKpiUncached(options: { includeTestUsers: boolean; now?
 
   const firstMonth = [historyRows.length ? [...history.keys()].sort()[0] : autoFrom, autoFrom].sort()[0];
   const months = monthRange(firstMonth, currentMonth).reverse();
-  const rows = buildMonthlyKpi({ months, auto, sales, manualReward, history, news: news.items, maids, historyCutoff });
   if (!historyRows.length) warnings.push("運営のCSV（2026年10月以前）がまだ取り込まれていません（runbook-2026-11/import-monthly-kpi-csv.sh）");
-  return { rows, historyCutoff, autoFrom, includeTestUsers: options.includeTestUsers, warnings };
+  return { months, auto, sales, history, news: news.items, maids, historyCutoff, autoFrom, warnings };
 }
