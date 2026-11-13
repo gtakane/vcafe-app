@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 月次指標の表を作る（分析用BigQueryのみ。既にあれば何もしない）。
 #   monthly_kpi_history … 運営の月次CSV（2026年10月以前）。import-monthly-kpi-csv.sh で入れる
-#   monthly_kpi_manual  … メイド報酬（手入力）。set-maid-reward.sh で入れる
+#   monthly_kpi_manual  … 以前のメイド報酬の手入力の表（読み取りのみ。今の手入力は step12 の monthly_kpi_overrides）
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 python3 - "${SYNC_DIR}/schema.sql" "$P" "$DS" <<'PY'

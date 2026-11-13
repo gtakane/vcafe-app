@@ -5,7 +5,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 MONTH=${1:-}; AMOUNT=${2:-}; AMOUNT=${AMOUNT//,/}
-if [[ ! "${MONTH}" =~ ^20[0-9]{2}-[01][0-9]$ ]] || [[ ! "${AMOUNT}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+if [[ ! "${MONTH}" =~ ^20[0-9]{2}-(0[1-9]|1[0-2])$ ]] || [[ ! "${AMOUNT}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   echo "使い方: bash set-maid-reward.sh 2026-11 1983558"; exit 2
 fi
 echo "${MONTH}: メイド報酬 ${AMOUNT} 円"

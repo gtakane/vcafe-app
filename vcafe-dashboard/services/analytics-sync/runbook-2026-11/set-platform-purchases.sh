@@ -9,7 +9,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 MONTH=${1:-}; APPLE=${2:-}; GOOGLE=${3:-}; STRIPE=${4:-}
 num() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]]; }
-if [[ ! "${MONTH}" =~ ^20[0-9]{2}-[01][0-9]$ ]] || ! num "${APPLE//,/}" || ! num "${GOOGLE//,/}" || ! num "${STRIPE//,/}"; then
+if [[ ! "${MONTH}" =~ ^20[0-9]{2}-(0[1-9]|1[0-2])$ ]] || ! num "${APPLE//,/}" || ! num "${GOOGLE//,/}" || ! num "${STRIPE//,/}"; then
   echo "使い方: bash set-platform-purchases.sh 2026-11 673183 188615 2605010（カンマは付けても可）"; exit 2
 fi
 APPLE=${APPLE//,/}; GOOGLE=${GOOGLE//,/}; STRIPE=${STRIPE//,/}

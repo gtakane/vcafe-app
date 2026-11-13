@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# 手順3: 同期ジョブのプログラムだけを差し替える（環境変数・スケジュールは変えない）
+# 同期ジョブのプログラムだけを差し替える（環境変数・スケジュールは変えない）。
+# 差し替え後は、次の毎時の同期から新しいプログラムで動く。取り込み直し（step4）は行わない。
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 cd "${DASHBOARD_DIR}"
 
-if ! bash "${SYNC_DIR}/check-bigquery-schema.sh" >/dev/null 2>&1; then
-  echo "BigQuery の列がそろっていません。先に手順2を実行してください。"; exit 1
+if ! SCHEMA_OUT=$(bash "${SYNC_DIR}/check-bigquery-schema.sh" 2>&1); then
+  echo "${SCHEMA_OUT}" | grep -E "★|BigQuery に" || echo "${SCHEMA_OUT}" | tail -5
+  echo
+  echo "BigQuery の表・列がそろっていないため、差し替えを中止しました（何も変更していません）。"
+  echo "手順書の付録の初回設定（step9・step11・step12）が済んでいるか確認してください。"
+  exit 1
 fi
 
 PREV=$(current_job_image)
@@ -21,5 +26,5 @@ gcloud builds submit --project=$P --region=$R --config=services/analytics-sync/c
 gcloud run jobs update $JOB --region=$R --project=$P --image=${IMG}
 
 echo
-echo "→ 差し替え完了。手順4へ進めます:  bash ${HERE}/step4-backfill.sh"
-echo "  （問題があったときの戻し方:  bash ${HERE}/rollback-job-image.sh ）"
+echo "→ 差し替え完了。次の毎時の同期から新しいプログラムで動きます。"
+echo "  問題があったときの戻し方:  bash ${HERE}/rollback-job-image.sh"
