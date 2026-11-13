@@ -17,4 +17,4 @@ WORK=$(mktemp -d); trap 'rm -rf "${WORK}"' EXIT
 python3 "${HERE}/monthly-kpi-csv.py" "${CSV}" "${WORK}/rows.ndjson" "${WORK}/schema.json"
 confirm "上の内容で monthly_kpi_history を入れ替えます。"
 bq load --project_id=$P --replace --source_format=NEWLINE_DELIMITED_JSON "${DS}.monthly_kpi_history" "${WORK}/rows.ndjson" "${WORK}/schema.json"
-echo "→ 取り込みました。月次指標の画面を開き直すと反映されます。"
+echo "→ 取り込みました。月次指標の画面で「最新にする」を押すと反映されます。"

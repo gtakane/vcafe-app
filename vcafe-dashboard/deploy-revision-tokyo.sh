@@ -130,8 +130,8 @@ echo "  旧リビジョン: ${CURRENT_REVISION}（引き続き100%）"
 echo "  新リビジョン: ${NEW_REVISION}（0%）"
 echo "  検証用URL   : ${TAG_URL}"
 echo
-echo "次: スモークテストを実行してください"
-echo "  bash smoke-test-revision.sh \"${TAG_URL}\""
+echo "次: スモークテストを実行してください（検証用URLは自動で探します）"
+echo "  bash ${SCRIPT_DIR}/services/analytics-sync/runbook-2026-11/smoke-latest-canary.sh"
 echo
-echo "その後、承認のうえ切替:"
-echo "  bash promote-revision-tokyo.sh ${NEW_REVISION}"
+echo "その後、検証用URLで画面を確認してから本番に切り替えます:"
+echo "  bash ${SCRIPT_DIR}/services/analytics-sync/runbook-2026-11/promote-latest-canary.sh"

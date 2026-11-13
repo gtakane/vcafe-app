@@ -21,4 +21,4 @@ MERGE vcafe_analytics.platform_purchases t
 USING (SELECT @m AS month) src ON t.month = src.month
 WHEN MATCHED THEN UPDATE SET apple = @a, google = @g, stripe = @s, enteredAt = CURRENT_TIMESTAMP()
 WHEN NOT MATCHED THEN INSERT (month, apple, google, stripe, enteredAt) VALUES (@m, @a, @g, @s, CURRENT_TIMESTAMP())'
-echo "→ 登録しました。"
+echo "→ 登録しました。月次指標の画面で「最新にする」を押すと反映されます。"

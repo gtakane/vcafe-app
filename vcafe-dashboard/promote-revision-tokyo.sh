@@ -125,7 +125,7 @@ fi
 echo
 echo "完了: ${NEW_REVISION} が100%を受けています。"
 echo
-echo "戻す場合: bash rollback-revision-tokyo.sh ${PREVIOUS_REVISION}"
+echo "戻す場合: bash ${SCRIPT_DIR}/rollback-revision-tokyo.sh ${PREVIOUS_REVISION}"
 echo "ERRORログの確認:"
 echo "  gcloud logging read 'resource.type=cloud_run_revision AND resource.labels.revision_name=${NEW_REVISION} AND severity>=ERROR' \\"
 echo "    --project=${PROJECT_ID} --freshness=15m --limit=50"
